@@ -171,9 +171,12 @@ void Init_TestProb_ELBDM_NFW()
    int NFW_num = 1;//User Input
 
    //User Input
-   vector <string> TestProb_FileName= {"Input__TestProb1"};     //Test problem input parameter filenames
-   vector <string> TypeName= {"UNKNOWN"};                               //Type of models 
-   vector <string> Profile_FileName= {"profile.txt"};
+   vector <string> TestProb_FileName;     //Test problem input parameter filenames
+  TestProb_FileName.push_back("Input__TestProb1")
+   vector <string> TypeName;                               //Type of models 
+  TypeName.push_back("UNKNOWN");
+   vector <string> Profile_FileName;
+  Profile_FileName.push_back("profile.txt");
 
    
    constructor_Models.construct_ic(NFW_num,TestProb_FileName,TypeName,Profile_FileName);
