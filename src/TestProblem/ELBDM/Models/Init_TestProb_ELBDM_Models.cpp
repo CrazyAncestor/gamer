@@ -5,7 +5,9 @@
 #include"string"
 
 using namespace std;
+#  ifdef PARTICLE
 extern Particle_IC_Constructor constructor_Models;//First Declared in Par_Init_ByFunction_Models
+#  endif
 static double Models_FreeT=10;
 
 // problem-specific function prototypes
@@ -171,13 +173,19 @@ void Init_TestProb_ELBDM_MODELS()
    int Models_num = 2;//User Input
 
    //User Input
-   vector <string> TestProb_FileName= {"Input__TestProb1","Input__TestProb2"};     //Test problem input parameter filenames
-   vector <string> TypeName= {"UNKNOWN","Plummer"};                               //Type of models 
-   vector <string> Profile_FileName= {"profile.txt","NONE"};
+      vector <string> TestProb_FileName;     //Test problem input parameter filenames
+      vector <string> TypeName;                               //Type of models 
+      vector <string> Profile_FileName;
+      TestProb_FileName.push_back("Input__TestProb1");
+      TestProb_FileName.push_back("Input__TestProb2");
+      TypeName.push_back("UNKNOWN");
+      TypeName.push_back("Plummer");
+      Profile_FileName.push_back("profile.txt");
+      Profile_FileName.push_back("NONE");
    
-   
+#  ifdef PARTICLE
    constructor_Models.construct_ic(Models_num,TestProb_FileName,TypeName,Profile_FileName);
-
+#  endif
    Init_Function_User_Ptr  = SetGridIC;
    
 #  ifdef PARTICLE

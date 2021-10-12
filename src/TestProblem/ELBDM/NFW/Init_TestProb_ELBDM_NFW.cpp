@@ -5,7 +5,9 @@
 #include"string"//NEW INCLUDES
 
 using namespace std;
+#  ifdef PARTICLE
 extern Particle_IC_Constructor constructor_Models;//First Declared in Par_Init_ByFunction_Models
+#  endif
 static double NFW_FreeT=10;
 
 // problem-specific function prototypes
@@ -172,15 +174,15 @@ void Init_TestProb_ELBDM_NFW()
 
    //User Input
    vector <string> TestProb_FileName;     //Test problem input parameter filenames
-  TestProb_FileName.push_back("Input__TestProb1")
+  TestProb_FileName.push_back("Input__TestProb1");
    vector <string> TypeName;                               //Type of models 
   TypeName.push_back("UNKNOWN");
    vector <string> Profile_FileName;
   Profile_FileName.push_back("profile.txt");
 
-   
+#  ifdef PARTICLE
    constructor_Models.construct_ic(NFW_num,TestProb_FileName,TypeName,Profile_FileName);
-
+#  endif
    Init_Function_User_Ptr  = SetGridIC;
    
 #  ifdef PARTICLE
