@@ -8,7 +8,7 @@ static RandomNumber_t *RNG = NULL;
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    :  Par_Init_ByFunction_ParEqmIC
+// Function    :  Par_Init_ByFunction_ParEqmIC_ELBDM
 // Description :  User-specified function to initialize particle attributes
 //
 // Note        :  1. Invoked by Init_GAMER() using the function pointer "Par_Init_ByFunction_Ptr"
@@ -39,7 +39,7 @@ static RandomNumber_t *RNG = NULL;
 // Return      :  ParMass, ParPosX/Y/Z, ParVelX/Y/Z, ParTime, AllAttribute
 //-------------------------------------------------------------------------------------------------------
 
-void Par_Init_ByFunction_ParEqmIC( const long NPar_ThisRank, const long NPar_AllRank,
+void Par_Init_ByFunction_ParEqmIC_ELBDM( const long NPar_ThisRank, const long NPar_AllRank,
                                    real *ParMass, real *ParPosX, real *ParPosY, real *ParPosZ,
                                    real *ParVelX, real *ParVelY, real *ParVelZ, real *ParTime,
                                    real *AllAttribute[PAR_NATT_TOTAL] )
@@ -114,6 +114,6 @@ void Par_Init_ByFunction_ParEqmIC( const long NPar_ThisRank, const long NPar_All
 
    if ( MPI_Rank == 0 )    Aux_Message( stdout, "%s ... done\n", __FUNCTION__ );
 
-} // FUNCTION : Par_Init_ByFunction_ParEqmIC
+} // FUNCTION : Par_Init_ByFunction_ParEqmIC_ELBDM
 
 #endif // #ifdef PARTICLE
