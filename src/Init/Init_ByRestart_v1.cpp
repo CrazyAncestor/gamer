@@ -476,13 +476,13 @@ void Init_ByRestart_v1( const char FileName[] )
 // must not reset load-balance variables (i.e., must adopt ResetLB_No) when calling LB_Init_LoadBalance() for the first time
 // since we MUST NOT overwrite IdxList_Real[] and IdxList_Real_IdxList[] already set above
    const double ParWeight_Zero   = 0.0;
-   const bool   Redistribute_Yes = true;
    const bool   Redistribute_No  = false;
+   const bool   SendGridData_No  = false;
    const bool   ResetLB_Yes      = true;
    const bool   ResetLB_No       = false;
    const int    AllLv            = -1;
 
-   LB_Init_LoadBalance( Redistribute_No, ParWeight_Zero, ResetLB_No, AllLv );
+   LB_Init_LoadBalance( Redistribute_No, SendGridData_No, ParWeight_Zero, ResetLB_No, AllLv );
 
 
 // fill up the data of non-leaf patches
@@ -1268,9 +1268,7 @@ void Load_Parameter_After_1200( FILE *File, const int FormatVersion, int &NLv_Re
       CompareVar( "CHECK_INTERMEDIATE",      check_intermediate,     CHECK_INTERMEDIATE,        NonFatal );
 #     endif
 
-#     ifdef MAX_ERROR
       CompareVar( "MAX_ERROR",               max_error,        (real)MAX_ERROR,                 NonFatal );
-#     endif
 
       if ( !enforce_positive )
          Aux_Message( stderr, "WARNING : %s : RESTART file (%s) != runtime (%s) !!\n",

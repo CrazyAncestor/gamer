@@ -71,6 +71,9 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 #  error : ERROR : unsupported MODEL !!
 #  endif // MODEL
 
+// when fluid is freezed, disable this criterion by resetting it to a huge value
+   if ( OPT__FREEZE_FLUID )   dTime[NdTime-1] = HUGE_NUMBER;
+
 
 // 1.2 CRITERION TWO : gravitational acceleration
 // =============================================================================================================
@@ -86,6 +89,9 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 #  else
 #  error : ERROR : unsupported MODEL !!
 #  endif // MODEL
+
+// when fluid is freezed, disable this criterion by resetting it to a huge value
+   if ( OPT__FREEZE_FLUID )   dTime[NdTime-1] = HUGE_NUMBER;
 #  endif // #ifdef GRAVITY
 
 
@@ -169,6 +175,9 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
       dTime[NdTime] = dTime_dt * ELBDM_GetTimeStep_Phase( lv );
       sprintf( dTime_Name[NdTime++], "%s", "ELBDM_Phase" );
    }
+
+// when fluid is freezed, disable this criterion by resetting it to a huge value
+   if ( OPT__FREEZE_FLUID )   dTime[NdTime-1] = HUGE_NUMBER;
 #  endif
 
 
@@ -299,6 +308,12 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 // =============================================================================================================
    if ( dTime_min <= 0.0  ||  !Aux_IsFinite(dTime_min) )
       Aux_Error( ERROR_INFO, "incorrect time-step (dTime_min = %20.14e) !!\n", dTime_min );
+
+// time synchronization may fail if dt/t is close to the round-off error limit
+// --> e.g., temporal interpolation in Prepare_PatchData() may fail
+   if (  Mis_CompareRealValue( Time[lv]+dTime_min, Time[lv], NULL, false )  )
+      Aux_Error( ERROR_INFO, "time-step is too small (lv=%d, dt=%20.14e, t=%20.14e, dt/t=%20.14e, max_error=%20.14e) !!\n",
+                 lv, dTime_min, Time[lv], dTime_min/Time[lv], MAX_ERROR_DBL );
 
 
 

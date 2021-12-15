@@ -37,20 +37,21 @@ const TestProbID_t
    TESTPROB_HYDRO_BLAST_WAVE                   =    1,
    TESTPROB_HYDRO_ACOUSTIC_WAVE                =    2,
    TESTPROB_HYDRO_BONDI                        =    3,
-   TESTPROB_HYDRO_CLUSTER_MERGER_VS_FLASH      =    4,
+   TESTPROB_HYDRO_CLUSTER_MERGER               =    4,
    TESTPROB_HYDRO_AGORA_ISOLATED_GALAXY        =    5,
    TESTPROB_HYDRO_CAUSTIC                      =    6,
    TESTPROB_HYDRO_SPHERICAL_COLLAPSE           =    7,
    TESTPROB_HYDRO_KELVIN_HELMHOLTZ_INSTABILITY =    8,
    TESTPROB_HYDRO_RIEMANN                      =    9,
-   TESTPROB_HYDRO_COLLIDING_JETS               =   10,
+   TESTPROB_HYDRO_JET                          =   10,
    TESTPROB_HYDRO_PLUMMER                      =   11,
    TESTPROB_HYDRO_GRAVITY                      =   12,
    TESTPROB_HYDRO_MHD_ABC                      =   13,
    TESTPROB_HYDRO_MHD_ORSZAG_TANG_VORTEX       =   14,
    TESTPROB_HYDRO_MHD_LINEAR_WAVE              =   15,
    TESTPROB_HYDRO_JEANS_INSTABILITY            =   16,
-   TESTPROB_HYDRO_MODELS                       =   17,
+   TESTPROB_HYDRO_PARTICLE_EQUILIBRIUM_IC      =   17,
+   TESTPROB_HYDRO_BARRED_POT                   =   51,
 
    TESTPROB_ELBDM_EXTPOT                       = 1000,
    TESTPROB_ELBDM_JEANS_INSTABILITY_COMOVING   = 1001,
@@ -61,10 +62,7 @@ const TestProbID_t
    TESTPROB_ELBDM_VORTEX_PAIR_LINEAR           = 1006,
    TESTPROB_ELBDM_ISOLATED_HALO                = 1007,
    TESTPROB_ELBDM_GAUSSIAN_WAVE_PACKET         = 1008,
-   TESTPROB_ELBDM_LSS                          = 1009,
-   TESTPROB_ELBDM_MODELS                       = 1010,
-   TESTPROB_ELBDM_NFW                          = 1011,
-   TESTPROB_ELBDM_Fornax                          = 1012;
+   TESTPROB_ELBDM_LSS                          = 1009;
 
 
 // program initialization options
@@ -115,12 +113,14 @@ const IntScheme_t
 // data reconstruction TVD limiters
 typedef int LR_Limiter_t;
 const LR_Limiter_t
-   LR_LIMITER_NONE = 0,
-   VANLEER         = 1,
-   GMINMOD         = 2,
-   ALBADA          = 3,
-   VL_GMINMOD      = 4,
-   EXTPRE          = 5;
+   LR_LIMITER_DEFAULT    = -1,
+   LR_LIMITER_NONE       = 0,
+   LR_LIMITER_VANLEER    = 1,
+   LR_LIMITER_GMINMOD    = 2,
+   LR_LIMITER_ALBADA     = 3,
+   LR_LIMITER_VL_GMINMOD = 4,
+   LR_LIMITER_EXTPRE     = 5,
+   LR_LIMITER_CENTRAL    = 6;
 
 
 // data output formats
@@ -199,6 +199,7 @@ const Solver_t
 #ifdef GRAVITY
   ,DT_GRA_SOLVER              = 6
 #endif
+  ,SRC_SOLVER                 = 7
   ;
 
 
@@ -289,13 +290,31 @@ const ParPass2Son_t
 #endif // #ifdef PARTICLE
 
 
-// gravity types (this type needs to be defined for the Fluid solver even when GRAVITY is off)
-typedef int OptGravityType_t;
-const OptGravityType_t
-   GRAVITY_NONE     = 0,
-   GRAVITY_SELF     = 1,
-   GRAVITY_EXTERNAL = 2,
-   GRAVITY_BOTH     = 3;
+// external acceleration (must be defined for the fluid solver even when GRAVITY is off)
+typedef int OptExtAcc_t;
+const OptExtAcc_t
+   EXT_ACC_NONE  = 0,
+   EXT_ACC_FUNC  = 1,
+   EXT_ACC_TABLE = 2;
+
+
+// external potential (must be defined for the fluid solver even when GRAVITY is off)
+typedef int OptExtPot_t;
+const OptExtPot_t
+   EXT_POT_NONE  = 0,
+   EXT_POT_FUNC  = 1,
+   EXT_POT_TABLE = 2;
+
+
+// different usages of external potential when computing total potential on level Lv
+// --> ADD     : add external potential on Lv
+//     SUB     : subtract external potential for preparing self-gravity potential on Lv-1
+//     SUB_TINT: like SUB but for temporal interpolation
+typedef int ExtPotUsage_t;
+const ExtPotUsage_t
+   EXT_POT_USAGE_ADD      = 0,
+   EXT_POT_USAGE_SUB      = 1,
+   EXT_POT_USAGE_SUB_TINT = 2;
 
 
 // forms of the Lohner's error estimator
@@ -317,12 +336,12 @@ const Opt1stFluxCorr_t
 
 typedef int OptRSolver1st_t;
 const OptRSolver1st_t
-   RSOLVER_1ST_NONE    = 0
-  ,RSOLVER_1ST_ROE     = 1
-  ,RSOLVER_1ST_HLLC    = 2
-  ,RSOLVER_1ST_HLLE    = 3
-  ,RSOLVER_1ST_HLLD    = 4
-  ;
+   RSOLVER_1ST_DEFAULT = -1,
+   RSOLVER_1ST_NONE    = 0,
+   RSOLVER_1ST_ROE     = 1,
+   RSOLVER_1ST_HLLC    = 2,
+   RSOLVER_1ST_HLLE    = 3,
+   RSOLVER_1ST_HLLD    = 4;
 #endif // #if ( MODEL == HYDRO )
 
 
@@ -348,6 +367,11 @@ typedef int NormPassive_t;
 const NormPassive_t
    NORMALIZE_NO  = 0,
    NORMALIZE_YES = 1;
+
+typedef int IntFracPassive_t;
+const IntFracPassive_t
+   INTERP_FRAC_NO  = 0,
+   INTERP_FRAC_YES = 1;
 
 
 // field types
@@ -386,9 +410,39 @@ const ELBDMRemoveMotionCM_t
 #endif
 
 
+// options in Aux_ComputeProfile()
+typedef int PatchType_t;
+const PatchType_t
+   PATCH_LEAF                 = 0,
+   PATCH_NONLEAF              = 1,
+   PATCH_BOTH                 = 2,
+   PATCH_LEAF_PLUS_MAXNONLEAF = 3;
+
+
 // function pointers
-typedef void (*ExtAcc_t)( real Acc[], const double x, const double y, const double z, const double Time, const double UserArray[] );
-typedef real (*ExtPot_t)( const double x, const double y, const double z, const double Time, const double UserArray[] );
+typedef real (*EoS_DE2P_t)( const real Dens, const real Eint, const real Passive[],
+                            const double AuxArray_Flt[], const int AuxArray_Int[],
+                            const real *const Table[EOS_NTABLE_MAX] );
+typedef real (*EoS_DP2E_t)( const real Dens, const real Pres, const real Passive[],
+                            const double AuxArray_Flt[], const int AuxArray_Int[],
+                            const real *const Table[EOS_NTABLE_MAX] );
+typedef real (*EoS_DP2C_t)( const real Dens, const real Pres, const real Passive[],
+                            const double AuxArray_Flt[], const int AuxArray_Int[],
+                            const real *const Table[EOS_NTABLE_MAX] );
+typedef void (*EoS_GENE_t)( const int Mode, real Out[], const real In_Flt[], const int In_Int[],
+                            const double AuxArray_Flt[], const int AuxArray_Int[],
+                            const real *const Table[EOS_NTABLE_MAX] );
+typedef real (*EoS_DE2T_t)( const real Dens, const real Eint, const real Passive[],
+                            const double AuxArray_Flt[], const int AuxArray_Int[],
+                            const real *const Table[EOS_NTABLE_MAX] );
+typedef real (*EoS_DT2P_t)( const real Dens, const real Temp, const real Passive[],
+                            const double AuxArray_Flt[], const int AuxArray_Int[],
+                            const real *const Table[EOS_NTABLE_MAX] );
+typedef void (*ExtAcc_t)( real Acc[], const double x, const double y, const double z, const double Time,
+                          const double UserArray[] );
+typedef real (*ExtPot_t)( const double x, const double y, const double z, const double Time,
+                          const double UserArray_Flt[], const int UserArray_Int[],
+                          const ExtPotUsage_t Usage, const real PotTable[], void **GenePtr );
 
 
 
