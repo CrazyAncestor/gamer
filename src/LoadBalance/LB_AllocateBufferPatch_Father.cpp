@@ -21,9 +21,9 @@
 //                4. This function will reconstruct the list LB_PaddedCr1DList[SonLv-1][]
 //                5. SearchAllSon == true  --> search over all real patches at SonLv
 //                                == false --> search over patches recorded in TargetSonPID0
-//                6. RecordFaPID  == ture  --> record the indices of all newly-allocated father-buffer patches
+//                6. RecordFaPID  == true  --> record the indices of all newly-allocated father-buffer patches
 //                                             (with LocalID==0)
-//                                         --> the pointer "*NewFaBufPID0" will be allocated with memory
+//                                         --> memory will be allocated for the pointer "*NewFaBufPID0"
 //                                         --> **this array must be deallocated manually**
 //                                == false --> do nothing
 //
@@ -150,7 +150,9 @@ void LB_AllocateBufferPatch_Father( const int SonLv, const bool SearchAllSon, co
             FaCr1D0     -= dr[d];
 
 #           ifdef GAMER_DEBUG
-            if ( FaCr1D0 < 0 )   Aux_Error( ERROR_INFO, "FaCr1D0 (%lu) < 0 (dr[%d] = %lu) !!\n", FaCr1D0, d, dr[d] );
+            if ( FaCr1D0 >= amr->patch[0][SonLv][SonPID0]->PaddedCr1D )
+               Aux_Error( ERROR_INFO, "FaCr1D0 (%lu) underflow (dr[%d] = %lu, PaddedCr1D = %lu) !!\n",
+                          FaCr1D0, d, dr[d], amr->patch[0][SonLv][SonPID0]->PaddedCr1D );
 #           endif
          }
          else
@@ -209,7 +211,7 @@ void LB_AllocateBufferPatch_Father( const int SonLv, const bool SearchAllSon, co
 
 
 // 2. sort the candidate list and remove duplicates (with the same FaCr1D)
-   Mis_Heapsort( NFaBuf_Dup, FaCr1D_List, NULL );
+   Mis_Heapsort<int,ulong>( NFaBuf_Dup, FaCr1D_List, NULL );
 
    NFaBuf = ( NFaBuf_Dup > 0 ) ? 1 : 0;
 
@@ -249,7 +251,7 @@ void LB_AllocateBufferPatch_Father( const int SonLv, const bool SearchAllSon, co
 
          if ( RecordFaPID )   (*NewFaBufPID0)[ NNew0 ++ ] = amr->num[FaLv];
 
-//       father patch is still unkown, data array is not allocated yet
+//       father patch is still unknown, data array is not allocated yet
          amr->pnew( FaLv, FaCr3D[0],          FaCr3D[1],          FaCr3D[2],          -1, false, false, false );
          amr->pnew( FaLv, FaCr3D[0]+FaPScale, FaCr3D[1],          FaCr3D[2],          -1, false, false, false );
          amr->pnew( FaLv, FaCr3D[0],          FaCr3D[1]+FaPScale, FaCr3D[2],          -1, false, false, false );

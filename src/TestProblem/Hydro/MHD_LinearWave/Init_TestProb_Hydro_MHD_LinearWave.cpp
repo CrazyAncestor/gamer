@@ -1,5 +1,4 @@
 #include "GAMER.h"
-#include "TestProb.h"
 
 
 
@@ -51,10 +50,6 @@ void Validate()
    Aux_Error( ERROR_INFO, "GRAVITY must be disabled !!\n" );
 #  endif
 
-#  ifndef FLOAT8
-   Aux_Error( ERROR_INFO, "FLOAT8 must be enabled !!\n" );
-#  endif
-
 #  ifdef PARTICLE
    Aux_Error( ERROR_INFO, "PARTICLE must be disabled !!\n" );
 #  endif
@@ -74,6 +69,10 @@ void Validate()
 // warnings
    if ( MPI_Rank == 0 )
    {
+#     ifndef FLOAT8
+      Aux_Message( stderr, "WARNING : it's recommended to enable FLOAT8 for this test !!\n" );
+#     endif
+
       if ( !OPT__OUTPUT_USER )   Aux_Message( stdout, "WARNING : OPT__OUTPUT_USER is off !!\n" );
    }
 
@@ -85,6 +84,56 @@ void Validate()
 
 
 #if ( MODEL == HYDRO )
+//-------------------------------------------------------------------------------------------------------
+// Function    :  LoadInputTestProb
+// Description :  Read problem-specific runtime parameters from Input__TestProb and store them in HDF5 snapshots (Data_*)
+//
+// Note        :  1. Invoked by SetParameter() to read parameters
+//                2. Invoked by Output_DumpData_Total_HDF5() using the function pointer Output_HDF5_InputTest_Ptr to store parameters
+//                3. If there is no problem-specific runtime parameter to load, add at least one parameter
+//                   to prevent an empty structure in HDF5_Output_t
+//                   --> Example:
+//                       LOAD_PARA( load_mode, "TestProb_ID", &TESTPROB_ID, TESTPROB_ID, TESTPROB_ID, TESTPROB_ID );
+//
+// Parameter   :  load_mode      : Mode for loading parameters
+//                                 --> LOAD_READPARA    : Read parameters from Input__TestProb
+//                                     LOAD_HDF5_OUTPUT : Store parameters in HDF5 snapshots
+//                ReadPara       : Data structure for reading parameters (used with LOAD_READPARA)
+//                HDF5_InputTest : Data structure for storing parameters in HDF5 snapshots (used with LOAD_HDF5_OUTPUT)
+//
+// Return      :  None
+//-------------------------------------------------------------------------------------------------------
+void LoadInputTestProb( const LoadParaMode_t load_mode, ReadPara_t *ReadPara, HDF5_Output_t *HDF5_InputTest )
+{
+
+#  ifndef SUPPORT_HDF5
+   if ( load_mode == LOAD_HDF5_OUTPUT )   Aux_Error( ERROR_INFO, "please turn on SUPPORT_HDF5 in the Makefile for load_mode == LOAD_HDF5_OUTPUT !!\n" );
+#  endif
+
+   if ( load_mode == LOAD_READPARA     &&  ReadPara       == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_READPARA and ReadPara == NULL !!\n" );
+   if ( load_mode == LOAD_HDF5_OUTPUT  &&  HDF5_InputTest == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_HDF5_OUTPUT and HDF5_InputTest == NULL !!\n" );
+
+// add parameters in the following format:
+// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
+// --> some handy constants (e.g., NoMin_int, Eps_float, ...) are defined in "include/ReadPara.h"
+// --> LOAD_PARA() is defined in "include/TestProb.h"
+// ************************************************************************************************************************
+// LOAD_PARA( load_mode, "KEY_IN_THE_FILE",   &VARIABLE,               DEFAULT,      MIN,              MAX               );
+// ************************************************************************************************************************
+   LOAD_PARA( load_mode, "MHDLinear_Mode",    &MHDLinear_Mode,        -1,            1,                1                 );
+   LOAD_PARA( load_mode, "MHDLinear_Rho0",    &MHDLinear_Rho0,        -1.0,          Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "MHDLinear_Rho1",    &MHDLinear_Rho1,        -1.0,          0.0,              NoMax_double      );
+   LOAD_PARA( load_mode, "MHDLinear_P0",      &MHDLinear_P0,          -1.0,          Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "MHDLinear_v0",      &MHDLinear_v0,           0.0,          NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "MHDLinear_Dir",     &MHDLinear_Dir,          3,            0,                3                 );
+   LOAD_PARA( load_mode, "MHDLinear_B0",      &MHDLinear_B0,          -1.0,          0.0,              NoMax_double      );
+   LOAD_PARA( load_mode, "MHDLinear_Sign",    &MHDLinear_Sign,         1.0,          NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "MHDLinear_Phase0",  &MHDLinear_Phase0,       0.0,          NoMin_double,     NoMax_double      );
+
+} // FUNCTION : LoadInputTestProb
+
+
+
 //-------------------------------------------------------------------------------------------------------
 // Function    :  SetParameter
 // Description :  Load and set the problem-specific runtime parameters
@@ -107,24 +156,11 @@ void SetParameter()
 
 
 // (1) load the problem-specific runtime parameters
+// (1-1) read parameters from Input__TestProb
    const char FileName[] = "Input__TestProb";
    ReadPara_t *ReadPara  = new ReadPara_t;
 
-// add parameters in the following format:
-// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
-// --> some handy constants (e.g., NoMin_int, Eps_float, ...) are defined in "include/ReadPara.h"
-// ********************************************************************************************************************************
-// ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
-// ********************************************************************************************************************************
-   ReadPara->Add( "MHDLinear_Mode",    &MHDLinear_Mode,        -1,            1,                1                 );
-   ReadPara->Add( "MHDLinear_Rho0",    &MHDLinear_Rho0,        -1.0,          Eps_double,       NoMax_double      );
-   ReadPara->Add( "MHDLinear_Rho1",    &MHDLinear_Rho1,        -1.0,          0.0,              NoMax_double      );
-   ReadPara->Add( "MHDLinear_P0",      &MHDLinear_P0,          -1.0,          Eps_double,       NoMax_double      );
-   ReadPara->Add( "MHDLinear_v0",      &MHDLinear_v0,           0.0,          NoMin_double,     NoMax_double      );
-   ReadPara->Add( "MHDLinear_Dir",     &MHDLinear_Dir,          3,            0,                3                 );
-   ReadPara->Add( "MHDLinear_B0",      &MHDLinear_B0,          -1.0,          0.0,              NoMax_double      );
-   ReadPara->Add( "MHDLinear_Sign",    &MHDLinear_Sign,         1.0,          NoMin_double,     NoMax_double      );
-   ReadPara->Add( "MHDLinear_Phase0",  &MHDLinear_Phase0,       0.0,          NoMin_double,     NoMax_double      );
+   LoadInputTestProb( LOAD_READPARA, ReadPara, NULL );
 
    ReadPara->Read( FileName );
 
@@ -146,18 +182,18 @@ void SetParameter()
 
 
 // (3) reset other general-purpose parameters
-//     --> a helper macro PRINT_WARNING is defined in TestProb.h
+//     --> a helper macro PRINT_RESET_PARA is defined in Macro.h
    const double End_T_Default    = MHDLinear_WaveLength / MHDLinear_WaveSpeed;
    const long   End_Step_Default = __INT_MAX__;
 
    if ( END_STEP < 0 ) {
       END_STEP = End_Step_Default;
-      PRINT_WARNING( "END_STEP", END_STEP, FORMAT_LONG );
+      PRINT_RESET_PARA( END_STEP, FORMAT_LONG, "" );
    }
 
    if ( END_T < 0.0 ) {
       END_T = End_T_Default;
-      PRINT_WARNING( "END_T", END_T, FORMAT_REAL );
+      PRINT_RESET_PARA( END_T, FORMAT_REAL, "" );
    }
 
 
@@ -350,9 +386,11 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
       Aux_Error( ERROR_INFO, "unsupported MHDLinear_Mode = %d !!\n", MHDLinear_Mode );
 
 } // FUNCTION : SetBFieldIC
+#endif // #ifdef MHD
 
 
 
+#ifdef MHD
 //-------------------------------------------------------------------------------------------------------
 // Function    :  OutputError
 // Description :  Output the L1 error
@@ -408,6 +446,9 @@ void Init_TestProb_Hydro_MHD_LinearWave()
 #  ifdef MHD
    Init_Function_BField_User_Ptr = SetBFieldIC;
    Output_User_Ptr               = OutputError;
+#  endif
+#  ifdef SUPPORT_HDF5
+   Output_HDF5_InputTest_Ptr     = LoadInputTestProb;
 #  endif
 #  endif // #if ( MODEL == HYDRO )
 

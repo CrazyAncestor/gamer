@@ -93,14 +93,15 @@ void Flu_ResetByUser( const int lv, const int FluSg, const double TTime )
 
 //          calculate the dual-energy variable (entropy or internal energy)
 #           if   ( DUAL_ENERGY == DE_ENPY )
-            fluid[ENPY] = CPU_Fluid2Entropy( fluid[DENS], fluid[MOMX], fluid[MOMY], fluid[MOMZ], fluid[ENGY], Gamma_m1 );
+            fluid[DUAL] = CPU_Fluid2Entropy( fluid[DENS], fluid[MOMX], fluid[MOMY], fluid[MOMZ], fluid[ENGY], Gamma_m1 );
 #           elif ( DUAL_ENERGY == DE_EINT )
 #           error : DE_EINT is NOT supported yet !!
 #           endif
 
 //          floor and normalize passive scalars
 #           if ( NCOMP_PASSIVE > 0 )
-            for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)  fluid[v] = FMAX( fluid[v], TINY_NUMBER );
+            for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)
+               if ( PassiveFloorMask & BIDX(v) )  fluid[v] = FMAX( fluid[v], TINY_NUMBER );
 
             if ( OPT__NORMALIZE_PASSIVE )
                CPU_NormalizePassive( fluid[DENS], fluid+NCOMP_FLUID, PassiveNorm_NVar, PassiveNorm_VarIdx );

@@ -1,5 +1,4 @@
 #include "GAMER.h"
-#include "TestProb.h"
 
 
 
@@ -13,9 +12,11 @@ const DensProf_t
    DENSPROF_NFW       = 1,
    DENSPROF_HERNQUIST = 2;
 
-static DensProf_t Gra_DensProf;  // density profile
-static double     Gra_Radius0;   // radius  parameter for the adopted density profile
-static double     Gra_Dens0;     // density parameter for the adopted density profile
+static DensProf_t Gra_DensProf;     // density profile
+static double     Gra_Radius0;      // radius  parameter for the adopted density profile
+static double     Gra_Dens0;        // density parameter for the adopted density profile
+static int        Gra_NIterPerf;    // number of iterations to measure the average performance of the Poisson solver (0->off)
+static bool       Gra_PerfExcRoot;  // exclude the root level when measuring the Poisson solver performance with Gra_NIterPerf
 // =======================================================================================
 
 
@@ -40,6 +41,10 @@ void Validate()
 // errors
 #  if ( MODEL != HYDRO )
    Aux_Error( ERROR_INFO, "MODEL != HYDRO !!\n" );
+#  endif
+
+#  ifdef MHD
+   Aux_Error( ERROR_INFO, "MHD must be disabled !!\n" );
 #  endif
 
 #  ifndef GRAVITY
@@ -84,6 +89,52 @@ void Validate()
 
 #if ( MODEL == HYDRO  &&  defined GRAVITY )
 //-------------------------------------------------------------------------------------------------------
+// Function    :  LoadInputTestProb
+// Description :  Read problem-specific runtime parameters from Input__TestProb and store them in HDF5 snapshots (Data_*)
+//
+// Note        :  1. Invoked by SetParameter() to read parameters
+//                2. Invoked by Output_DumpData_Total_HDF5() using the function pointer Output_HDF5_InputTest_Ptr to store parameters
+//                3. If there is no problem-specific runtime parameter to load, add at least one parameter
+//                   to prevent an empty structure in HDF5_Output_t
+//                   --> Example:
+//                       LOAD_PARA( load_mode, "TestProb_ID", &TESTPROB_ID, TESTPROB_ID, TESTPROB_ID, TESTPROB_ID );
+//
+// Parameter   :  load_mode      : Mode for loading parameters
+//                                 --> LOAD_READPARA    : Read parameters from Input__TestProb
+//                                     LOAD_HDF5_OUTPUT : Store parameters in HDF5 snapshots
+//                ReadPara       : Data structure for reading parameters (used with LOAD_READPARA)
+//                HDF5_InputTest : Data structure for storing parameters in HDF5 snapshots (used with LOAD_HDF5_OUTPUT)
+//
+// Return      :  None
+//-------------------------------------------------------------------------------------------------------
+void LoadInputTestProb( const LoadParaMode_t load_mode, ReadPara_t *ReadPara, HDF5_Output_t *HDF5_InputTest )
+{
+
+#  ifndef SUPPORT_HDF5
+   if ( load_mode == LOAD_HDF5_OUTPUT )   Aux_Error( ERROR_INFO, "please turn on SUPPORT_HDF5 in the Makefile for load_mode == LOAD_HDF5_OUTPUT !!\n" );
+#  endif
+
+   if ( load_mode == LOAD_READPARA     &&  ReadPara       == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_READPARA and ReadPara == NULL !!\n" );
+   if ( load_mode == LOAD_HDF5_OUTPUT  &&  HDF5_InputTest == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_HDF5_OUTPUT and HDF5_InputTest == NULL !!\n" );
+
+// add parameters in the following format:
+// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
+// --> some handy constants (e.g., NoMin_int, Eps_float, ...) are defined in "include/ReadPara.h"
+// --> LOAD_PARA() is defined in "include/TestProb.h"
+// ************************************************************************************************************************
+// LOAD_PARA( load_mode, "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
+// ************************************************************************************************************************
+   LOAD_PARA( load_mode, "Gra_DensProf",      &Gra_DensProf,          2,             1,                2                 );
+   LOAD_PARA( load_mode, "Gra_Radius0",       &Gra_Radius0,           1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Gra_Dens0",         &Gra_Dens0,             1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Gra_NIterPerf",     &Gra_NIterPerf,         0,             0,                NoMax_int         );
+   LOAD_PARA( load_mode, "Gra_PerfExcRoot",   &Gra_PerfExcRoot,       false,         Useless_bool,     Useless_bool      );
+
+} // FUNCTION : LoadInputTestProb
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    :  SetParameter
 // Description :  Load and set the problem-specific runtime parameters
 //
@@ -105,18 +156,11 @@ void SetParameter()
 
 
 // (1) load the problem-specific runtime parameters
+// (1-1) read parameters from Input__TestProb
    const char FileName[] = "Input__TestProb";
    ReadPara_t *ReadPara  = new ReadPara_t;
 
-// (1-1) add parameters in the following format:
-// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
-// --> some handy constants (e.g., Useless_bool, Eps_double, NoMin_int, ...) are defined in "include/ReadPara.h"
-// ********************************************************************************************************************************
-// ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
-// ********************************************************************************************************************************
-   ReadPara->Add( "Gra_DensProf",      &Gra_DensProf,          2,             1,                2                 );
-   ReadPara->Add( "Gra_Radius0",       &Gra_Radius0,           1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Gra_Dens0",         &Gra_Dens0,             1.0,           Eps_double,       NoMax_double      );
+   LoadInputTestProb( LOAD_READPARA, ReadPara, NULL );
 
    ReadPara->Read( FileName );
 
@@ -131,18 +175,28 @@ void SetParameter()
 
 
 // (3) reset other general-purpose parameters
-//     --> a helper macro PRINT_WARNING is defined in TestProb.h
+//     --> a helper macro PRINT_RESET_PARA is defined in Macro.h
    const long   End_Step_Default = 0;
    const double End_T_Default    = 0.0;
 
    if ( END_STEP < 0 ) {
       END_STEP = End_Step_Default;
-      PRINT_WARNING( "END_STEP", END_STEP, FORMAT_LONG );
+      PRINT_RESET_PARA( END_STEP, FORMAT_LONG, "" );
    }
 
    if ( END_T < 0.0 ) {
       END_T = End_T_Default;
-      PRINT_WARNING( "END_T", END_T, FORMAT_REAL );
+      PRINT_RESET_PARA( END_T, FORMAT_REAL, "" );
+   }
+
+   if ( Gra_NIterPerf > 0  &&  !OPT__RECORD_USER ) {
+      OPT__RECORD_USER = true;
+      PRINT_RESET_PARA( OPT__RECORD_USER, FORMAT_BOOL, "" );
+   }
+
+   else if ( Gra_NIterPerf == 0  &&  OPT__RECORD_USER ) {
+      OPT__RECORD_USER = false;
+      PRINT_RESET_PARA( OPT__RECORD_USER, FORMAT_BOOL, "" );
    }
 
 
@@ -150,10 +204,12 @@ void SetParameter()
    if ( MPI_Rank == 0 )
    {
       Aux_Message( stdout, "=============================================================================\n" );
-      Aux_Message( stdout, "  test problem ID = %d\n",     TESTPROB_ID  );
-      Aux_Message( stdout, "  Gra_DensProf    = %d\n",     Gra_DensProf );
-      Aux_Message( stdout, "  Gra_Radius0     = %13.7e\n", Gra_Radius0  );
-      Aux_Message( stdout, "  Gra_Dens0       = %13.7e\n", Gra_Dens0    );
+      Aux_Message( stdout, "  test problem ID = %d\n",     TESTPROB_ID     );
+      Aux_Message( stdout, "  Gra_DensProf    = %d\n",     Gra_DensProf    );
+      Aux_Message( stdout, "  Gra_Radius0     = %13.7e\n", Gra_Radius0     );
+      Aux_Message( stdout, "  Gra_Dens0       = %13.7e\n", Gra_Dens0       );
+      Aux_Message( stdout, "  Gra_NIterPerf   = %d\n",     Gra_NIterPerf   );
+      Aux_Message( stdout, "  Gra_PerfExcRoot = %d\n",     Gra_PerfExcRoot );
       Aux_Message( stdout, "=============================================================================\n" );
    }
 
@@ -206,10 +262,10 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
          exit( -1 );
    }
 
-   fluid[MOMX] = NULL_REAL;
-   fluid[MOMY] = NULL_REAL;
-   fluid[MOMZ] = NULL_REAL;
-   fluid[ENGY] = NULL_REAL;
+   fluid[MOMX] = 0.0;
+   fluid[MOMY] = 0.0;
+   fluid[MOMZ] = 0.0;
+   fluid[ENGY] = 1.0e10;
 
 } // FUNCTION : SetGridIC
 
@@ -301,6 +357,79 @@ void OutputError()
    Output_DumpData_Part( OUTPUT_DIAG, false, NULL_INT, NULL_INT, NULL_INT, filename_txt );
 
 } // FUNCTION : OutputError
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  Aux_Record_Gravity
+// Description :  Invoke the Poisson solver and measure its performance
+//
+// Note        :  1. Invoked by main() using the function pointer "Aux_Record_User_Ptr",
+//                   which must be set by a test problem initializer
+//                2. Enabled by the runtime option "OPT__RECORD_USER"
+//
+// Parameter   :  None
+//-------------------------------------------------------------------------------------------------------
+void Aux_Record_Gravity()
+{
+
+// measure the total elapsed time of invoking the Poisson solver Gra_NIterPerf times
+   const double Poi_Coeff = 4.0*M_PI*NEWTON_G;
+   const int    MinLv     = ( Gra_PerfExcRoot ) ? 1 : 0;
+   Timer_t Timer_PoiPerf;
+
+// start from lv=0 even when enabling Gra_PerfExcRoot to provide correct boundary conditions for higher levels
+   for (int lv=0; lv<NLEVEL; lv++)
+   {
+      Buf_GetBufferData( lv, amr->FluSg[lv], NULL_INT, NULL_INT, DATA_GENERAL, _DENS, _NONE,
+                         Rho_ParaBuf, USELB_YES );
+
+//    exclude the time for exchanging MPI buffer data
+      if ( lv >= MinLv )   Timer_PoiPerf.Start();
+      for (int t=0; t<Gra_NIterPerf; t++)
+      {
+         if ( lv == 0 )
+            CPU_PoissonSolver_FFT( Poi_Coeff, amr->PotSg[lv], Time[lv] );
+
+         else
+            InvokeSolver( POISSON_SOLVER, lv, Time[lv], NULL_REAL, NULL_REAL, Poi_Coeff,
+                          NULL_INT, NULL_INT, amr->PotSg[lv], false, false );
+      }
+      if ( lv >= MinLv )   Timer_PoiPerf.Stop();
+
+      if ( lv > 0 )
+      Buf_GetBufferData( lv, NULL_INT, NULL_INT, amr->PotSg[lv], POT_FOR_POISSON, _POTE, _NONE,
+                         Pot_ParaBuf, USELB_YES );
+   } // for (int lv=0; lv<NLEVEL; lv++)
+
+
+// record the results
+   if ( MPI_Rank == 0 )
+   {
+//    header
+      char FileName[2*MAX_STRING];
+      sprintf( FileName, "%s/Record__PoissonPerformance", OUTPUT_DIR );
+
+      if ( !Aux_CheckFileExist(FileName) )
+      {
+         FILE *File = fopen( FileName, "w" );
+         fprintf( File, "#%6s  %7s  %10s  %7s  %13s  %13s\n",
+                  "NRank", "NThread", "NCell", "NIter", "Time [s]", "Cells/s" );
+         fclose( File );
+      }
+
+//    performance
+      const double TimePoi = Timer_PoiPerf.GetValue();
+      long NCell = 0;
+      for (int lv=MinLv; lv<NLEVEL; lv++)  NCell += (long)NPatchTotal[lv]*CUBE( PS1 );
+
+      FILE *File = fopen( FileName, "a" );
+      fprintf( File, "%7d  %7d  %10ld  %7d  %13.7e  %13.7e\n",
+               MPI_NRank, OMP_NTHREAD, NCell, Gra_NIterPerf, TimePoi, (double)NCell*Gra_NIterPerf/TimePoi );
+      fclose( File );
+   } // if ( MPI_Rank == 0 )
+
+} // FUNCTION : Aux_Record_Gravity
 #endif // #if ( MODEL == HYDRO  &&  defined GRAVITY )
 
 
@@ -330,8 +459,12 @@ void Init_TestProb_Hydro_Gravity()
    SetParameter();
 
 
-   Init_Function_User_Ptr = SetGridIC;
-   Output_User_Ptr        = OutputError;
+   Init_Function_User_Ptr    = SetGridIC;
+   Output_User_Ptr           = OutputError;
+   Aux_Record_User_Ptr       = Aux_Record_Gravity;
+#  ifdef SUPPORT_HDF5
+   Output_HDF5_InputTest_Ptr = LoadInputTestProb;
+#  endif
 #  endif
 
 

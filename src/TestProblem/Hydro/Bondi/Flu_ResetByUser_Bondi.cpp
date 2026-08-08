@@ -2,8 +2,7 @@
 
 #if ( MODEL == HYDRO  &&  defined GRAVITY )
 
-
-
+extern double Bondi_MassBH;
 extern double Bondi_InBC_Rho;
 extern double Bondi_InBC_R;
 extern double Bondi_InBC_E;
@@ -18,6 +17,9 @@ extern double Bondi_SinkMomZAbs;
 extern double Bondi_SinkEk;
 extern double Bondi_SinkEt;
 extern int    Bondi_SinkNCell;
+
+extern bool   Bondi_void;
+extern bool   Bondi_dynBH;
 
 
 
@@ -38,6 +40,7 @@ extern int    Bondi_SinkNCell;
 //
 // Parameter   :  fluid    : Fluid array storing both the input (origial) and reset values
 //                           --> Including both active and passive variables
+//                Emag     : Magnetic energy (MHD only)
 //                x/y/z    : Target physical coordinates
 //                Time     : Target physical time
 //                dt       : Time interval to advance solution
@@ -47,9 +50,12 @@ extern int    Bondi_SinkNCell;
 // Return      :  true  : This cell has been reset
 //                false : This cell has not been reset
 //-------------------------------------------------------------------------------------------------------
-bool Flu_ResetByUser_Func_Bondi( real fluid[], const double x, const double y, const double z, const double Time,
-                                 const double dt, const int lv, double AuxArray[] )
+int Flu_ResetByUser_Func_Bondi( real fluid[], const double Emag, const double x, const double y, const double z, const double Time,
+                                const double dt, const int lv, double AuxArray[] )
 {
+
+   if ( !Bondi_void )   return false;
+
 
    const double Pos[3]  = { x, y, z };
    const double InBC_R2 = SQR( Bondi_InBC_R );
@@ -95,22 +101,25 @@ bool Flu_ResetByUser_Func_Bondi( real fluid[], const double x, const double y, c
 //
 // Parameter   :  lv      : Target refinement level
 //                FluSg   : Target fluid sandglass
+//                MagSg   : Target B field sandglass
 //                TimeNew : Current physical time (system has been updated from TimeOld to TimeNew in EvolveLevel())
 //                dt      : Time interval to advance solution (can be different from TimeNew-TimeOld in COMOVING)
 //-------------------------------------------------------------------------------------------------------
-void Flu_ResetByUser_API_Bondi( const int lv, const int FluSg, const double TimeNew, const double dt )
+void Flu_ResetByUser_API_Bondi( const int lv, const int FluSg, const int MagSg, const double TimeNew, const double dt )
 {
 
    const double dh       = amr->dh[lv];
    const real   dv       = CUBE(dh);
-#  if ( MODEL == HYDRO  ||  MODEL == MHD )
+#  if ( MODEL == HYDRO )
    const real   Gamma_m1 = GAMMA - (real)1.0;
    const real  _Gamma_m1 = (real)1.0 / Gamma_m1;
 #  endif
 
-   bool   Reset;
+   int    Reset;
    real   fluid[NCOMP_TOTAL], fluid_bk[NCOMP_TOTAL];
    double x, y, z, x0, y0, z0;
+   double SinkMass_OneSubStep_ThisRank = 0.0;   // variables to record sink mass at every time step
+   double SinkMass_OneSubStep_AllRank;
 
 // reset to 0 since we only want to record the number of void cells **for one sub-step**
    Bondi_SinkNCell = 0;
@@ -118,7 +127,7 @@ void Flu_ResetByUser_API_Bondi( const int lv, const int FluSg, const double Time
 
 #  pragma omp parallel for private( Reset, fluid, fluid_bk, x, y, z, x0, y0, z0 ) schedule( runtime ) \
    reduction(+:Bondi_SinkMass, Bondi_SinkMomX, Bondi_SinkMomY, Bondi_SinkMomZ, Bondi_SinkMomXAbs, Bondi_SinkMomYAbs, Bondi_SinkMomZAbs, \
-               Bondi_SinkEk, Bondi_SinkEt, Bondi_SinkNCell)
+               Bondi_SinkEk, Bondi_SinkEt, Bondi_SinkNCell, SinkMass_OneSubStep_ThisRank )
    for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++)
    {
       x0 = amr->patch[0][lv][PID]->EdgeL[0] + 0.5*dh;
@@ -137,40 +146,41 @@ void Flu_ResetByUser_API_Bondi( const int lv, const int FluSg, const double Time
             fluid_bk[v] = fluid[v];
          }
 
+#        ifdef MHD
+         const real Emag = MHD_GetCellCenteredBEnergyInPatch( lv, PID, i, j, k, amr->MagSg[lv] );
+#        else
+         const real Emag = (real)0.0;
+#        endif
+
 //       reset this cell
-         Reset = Flu_ResetByUser_Func_Bondi( fluid, x, y, z, TimeNew, dt, lv, NULL );
+         Reset = Flu_ResetByUser_Func_Bondi( fluid, Emag, x, y, z, TimeNew, dt, lv, NULL );
 
 //       operations necessary only when this cell has been reset
          if ( Reset )
          {
 //          apply density and energy floors
-#           if ( MODEL == HYDRO  ||  MODEL == MHD )
-#           ifdef MHD
-            const real Emag = MHD_GetCellCenteredBEnergyInPatch( lv, PID, i, j, k, amr->MagSg[lv] );
-#           else
-            const real Emag = NULL_REAL;
-#           endif
+#           if ( MODEL == HYDRO )
 
             fluid[DENS] = FMAX( fluid[DENS], (real)MIN_DENS );
             fluid[ENGY] = Hydro_CheckMinEintInEngy( fluid[DENS], fluid[MOMX], fluid[MOMY], fluid[MOMZ], fluid[ENGY],
-                                                    (real)MIN_EINT, Emag );
+                                                    (real)MIN_EINT, PassiveFloorMask, Emag );
 
-//          calculate the dual-energy variable (entropy or internal energy)
-#           if   ( DUAL_ENERGY == DE_ENPY )
-            fluid[ENPY] = Hydro_Con2Entropy( fluid[DENS], fluid[MOMX], fluid[MOMY], fluid[MOMZ], fluid[ENGY], Emag,
-                                             EoS_DensEint2Pres_CPUPtr, EoS_AuxArray_Flt, EoS_AuxArray_Int, h_EoS_Table );
-#           elif ( DUAL_ENERGY == DE_EINT )
-#           error : DE_EINT is NOT supported yet !!
+//          calculate the dual-energy variable
+#           ifdef DUAL_ENERGY
+            fluid[DUAL] = Hydro_Con2Dual( fluid[DENS], fluid[MOMX], fluid[MOMY], fluid[MOMZ], fluid[ENGY], Emag,
+                                          EoS_DensEint2Pres_CPUPtr, EoS_AuxArray_Flt, EoS_AuxArray_Int, h_EoS_Table,
+                                          PassiveFloorMask );
 #           endif
 
 //          floor and normalize passive scalars
 #           if ( NCOMP_PASSIVE > 0 )
-            for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)  fluid[v] = FMAX( fluid[v], TINY_NUMBER );
+            for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)
+               if ( PassiveFloorMask & BIDX(v) ) fluid[v] = FMAX( fluid[v], TINY_NUMBER );
 
             if ( OPT__NORMALIZE_PASSIVE )
                Hydro_NormalizePassive( fluid[DENS], fluid+NCOMP_FLUID, PassiveNorm_NVar, PassiveNorm_VarIdx );
 #           endif
-#           endif // if ( MODEL == HYDRO  ||  MODEL == MHD )
+#           endif // if ( MODEL == HYDRO )
 
 //          store the reset values
             for (int v=0; v<NCOMP_TOTAL; v++)   amr->patch[FluSg][lv][PID]->fluid[v][k][j][i] = fluid[v];
@@ -180,7 +190,7 @@ void Flu_ResetByUser_API_Bondi( const int lv, const int FluSg, const double Time
             if ( lv == MAX_LEVEL )
             {
                real Ek = (real)0.5*( SQR(fluid_bk[MOMX]) + SQR(fluid_bk[MOMY]) + SQR(fluid_bk[MOMZ]) ) / fluid_bk[DENS];
-               real Et = fluid_bk[ENGY] - Ek;
+               real Et = fluid_bk[ENGY] - Ek - Emag;
 
                Bondi_SinkMass    += dv*fluid_bk[DENS];
                Bondi_SinkMomX    += dv*fluid_bk[MOMX];
@@ -192,11 +202,25 @@ void Flu_ResetByUser_API_Bondi( const int lv, const int FluSg, const double Time
                Bondi_SinkEk      += dv*Ek;
                Bondi_SinkEt      += dv*Et;
                Bondi_SinkNCell   ++;
+
+               SinkMass_OneSubStep_ThisRank += dv*fluid_bk[DENS];
+            }
+
+            else if ( amr->patch[0][lv][PID]->son == -1 )
+            {
+//             void region must be completely refined to the max level
+               Aux_Error( ERROR_INFO, "void region lies outside the max-level region !!\n" );
             }
          } // if ( Reset )
-
       }}} // i,j,k
    } // for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++)
+
+   if ( Bondi_dynBH )
+   {
+      MPI_Allreduce( &SinkMass_OneSubStep_ThisRank, &SinkMass_OneSubStep_AllRank, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD );
+
+      Bondi_MassBH += SinkMass_OneSubStep_AllRank;
+   }
 
 } // FUNCTION : Flu_ResetByUser_API_Bondi
 

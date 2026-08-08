@@ -69,16 +69,15 @@ void Gra_Close( const int lv, const int SaveSg, const real h_Flu_Array_G[][GRA_N
                const real Emag = NULL_REAL;
 #              endif
 
-#              if   ( DUAL_ENERGY == DE_ENPY )
-               amr->patch[SaveSg][lv][PID]->fluid[ENPY][k][j][i]
-                  = Hydro_Con2Entropy( amr->patch[SaveSg][lv][PID]->fluid[DENS][k][j][i],
-                                       amr->patch[SaveSg][lv][PID]->fluid[MOMX][k][j][i],
-                                       amr->patch[SaveSg][lv][PID]->fluid[MOMY][k][j][i],
-                                       amr->patch[SaveSg][lv][PID]->fluid[MOMZ][k][j][i],
-                                       amr->patch[SaveSg][lv][PID]->fluid[ENGY][k][j][i],
-                                       Emag, EoS_DensEint2Pres_CPUPtr, EoS_AuxArray_Flt, EoS_AuxArray_Int, h_EoS_Table );
-#              elif ( DUAL_ENERGY == DE_EINT )
-#              error : DE_EINT is NOT supported yet !!
+#              ifdef DUAL_ENERGY
+               amr->patch[SaveSg][lv][PID]->fluid[DUAL][k][j][i]
+                  = Hydro_Con2Dual( amr->patch[SaveSg][lv][PID]->fluid[DENS][k][j][i],
+                                    amr->patch[SaveSg][lv][PID]->fluid[MOMX][k][j][i],
+                                    amr->patch[SaveSg][lv][PID]->fluid[MOMY][k][j][i],
+                                    amr->patch[SaveSg][lv][PID]->fluid[MOMZ][k][j][i],
+                                    amr->patch[SaveSg][lv][PID]->fluid[ENGY][k][j][i],
+                                    Emag, EoS_DensEint2Pres_CPUPtr, EoS_AuxArray_Flt, EoS_AuxArray_Int, h_EoS_Table,
+                                    PassiveFloorMask );
 #              endif
             }
 #           endif // #ifdef UNSPLIT_GRAVITY
@@ -86,12 +85,24 @@ void Gra_Close( const int lv, const int SaveSg, const real h_Flu_Array_G[][GRA_N
 #        endif // #ifdef DUAL_ENERGY
 
 #        elif ( MODEL == ELBDM )
-//       density field is NOT sent in and out in the ELBDM gravity solver
          for (int v=0; v<GRA_NIN; v++)
          for (int k=0; k<PATCH_SIZE; k++)
          for (int j=0; j<PATCH_SIZE; j++)
          for (int i=0; i<PATCH_SIZE; i++)
+         {
+#           if ( ELBDM_SCHEME == ELBDM_HYBRID )
+            if ( amr->use_wave_flag[lv] ) {
+#           endif
+//          density field is NOT sent in and out in the ELBDM gravity solver for the wave scheme --> v+1
             amr->patch[SaveSg][lv][PID]->fluid[v+1][k][j][i] = h_Flu_Array_G[N][v][k][j][i];
+#           if ( ELBDM_SCHEME == ELBDM_HYBRID )
+            } else {
+//          in fluid scheme, send both density and phase fields --> v
+//###OPTIMIZATION: no need to transfer and update the density field
+            amr->patch[SaveSg][lv][PID]->fluid[v][k][j][i] = h_Flu_Array_G[N][v][k][j][i];
+            }
+#           endif
+         }
 
 #        else
 #        error : unsupported MODEL !!

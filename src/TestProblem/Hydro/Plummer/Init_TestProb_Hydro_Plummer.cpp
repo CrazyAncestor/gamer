@@ -1,5 +1,4 @@
 #include "GAMER.h"
-#include "TestProb.h"
 
 
 
@@ -20,6 +19,18 @@
        int    Plummer_MassProfNBin; // number of radial bins in the mass profile table
 static bool   Plummer_AddColor;     // assign different colors to different clouds for Plummer_Collision
 
+#ifdef FEEDBACK
+       bool   Plummer_FB_Exp;       // enable explosion feedback
+       double Plummer_FB_ExpEMin;   // minimum/maximum energy gain factors    for Plummer_FB_Exp (0-->no energy gain)
+       double Plummer_FB_ExpEMax;
+       double Plummer_FB_ExpMMin;   // minimum/maximum mass loss factors      for Plummer_FB_Exp (0-->no mass loss; 1-->loss all mass)
+       double Plummer_FB_ExpMMax;
+       bool   Plummer_FB_Acc;       // enable mass accretion feedback
+       double Plummer_FB_AccMMin;   // minimum/maximum mass accretion factors for Plummer_FB_Acc (0-->no mass accretion; 1-->accrete all mass)
+       double Plummer_FB_AccMMax;
+       double Plummer_FB_Like;      // feedback likelihood of each particle (0-1)
+#endif
+
 static double Plummer_FreeT;        // free-fall time at Plummer_R0
 
 static FieldIdx_t Plummer_Idx_Cloud0 = Idx_Undefined;    // field indices for Plummer_AddColor
@@ -27,14 +38,19 @@ static FieldIdx_t Plummer_Idx_Cloud1 = Idx_Undefined;
 // =======================================================================================
 
 // problem-specific function prototypes
-#ifdef PARTICLE
+#ifdef MASSIVE_PARTICLES
 void Par_Init_ByFunction_Plummer( const long NPar_ThisRank, const long NPar_AllRank,
-                                  real *ParMass, real *ParPosX, real *ParPosY, real *ParPosZ,
-                                  real *ParVelX, real *ParVelY, real *ParVelZ, real *ParTime,
-                                  real *AllAttribute[PAR_NATT_TOTAL] );
+                                  real_par *ParMass, real_par *ParPosX, real_par *ParPosY, real_par *ParPosZ,
+                                  real_par *ParVelX, real_par *ParVelY, real_par *ParVelZ, real_par *ParTime,
+                                  long_par *ParType,
+                                  real_par *AllAttributeFlt[PAR_NATT_FLT_TOTAL],
+                                  long_par *AllAttributeInt[PAR_NATT_INT_TOTAL] );
 #endif
 void Init_ExtAcc_Plummer();
 void Init_ExtPot_Plummer();
+#ifdef FEEDBACK
+void FB_Init_Plummer();
+#endif
 
 
 
@@ -96,6 +112,75 @@ void Validate()
 
 #if ( MODEL == HYDRO )
 //-------------------------------------------------------------------------------------------------------
+// Function    :  LoadInputTestProb
+// Description :  Read problem-specific runtime parameters from Input__TestProb and store them in HDF5 snapshots (Data_*)
+//
+// Note        :  1. Invoked by SetParameter() to read parameters
+//                2. Invoked by Output_DumpData_Total_HDF5() using the function pointer Output_HDF5_InputTest_Ptr to store parameters
+//                3. If there is no problem-specific runtime parameter to load, add at least one parameter
+//                   to prevent an empty structure in HDF5_Output_t
+//                   --> Example:
+//                       LOAD_PARA( load_mode, "TestProb_ID", &TESTPROB_ID, TESTPROB_ID, TESTPROB_ID, TESTPROB_ID );
+//
+// Parameter   :  load_mode      : Mode for loading parameters
+//                                 --> LOAD_READPARA    : Read parameters from Input__TestProb
+//                                     LOAD_HDF5_OUTPUT : Store parameters in HDF5 snapshots
+//                ReadPara       : Data structure for reading parameters (used with LOAD_READPARA)
+//                HDF5_InputTest : Data structure for storing parameters in HDF5 snapshots (used with LOAD_HDF5_OUTPUT)
+//
+// Return      :  None
+//-------------------------------------------------------------------------------------------------------
+void LoadInputTestProb( const LoadParaMode_t load_mode, ReadPara_t *ReadPara, HDF5_Output_t *HDF5_InputTest )
+{
+
+#  ifndef SUPPORT_HDF5
+   if ( load_mode == LOAD_HDF5_OUTPUT )   Aux_Error( ERROR_INFO, "please turn on SUPPORT_HDF5 in the Makefile for load_mode == LOAD_HDF5_OUTPUT !!\n" );
+#  endif
+
+   if ( load_mode == LOAD_READPARA     &&  ReadPara       == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_READPARA and ReadPara == NULL !!\n" );
+   if ( load_mode == LOAD_HDF5_OUTPUT  &&  HDF5_InputTest == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_HDF5_OUTPUT and HDF5_InputTest == NULL !!\n" );
+
+// add parameters in the following format:
+// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
+// --> some handy constants (e.g., NoMin_int, Eps_float, ...) are defined in "include/ReadPara.h"
+// --> LOAD_PARA() is defined in "include/TestProb.h"
+// ***************************************************************************************************************************
+// LOAD_PARA( load_mode, "KEY_IN_THE_FILE",      &VARIABLE,              DEFAULT,       MIN,              MAX               );
+// ***************************************************************************************************************************
+   LOAD_PARA( load_mode, "Plummer_RSeed",        &Plummer_RSeed,         123,           0,                NoMax_int         );
+   LOAD_PARA( load_mode, "Plummer_Rho0",         &Plummer_Rho0,          1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_R0",           &Plummer_R0,            0.1,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_MaxR",         &Plummer_MaxR,          0.375,         Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_Collision",    &Plummer_Collision,     false,         Useless_bool,     Useless_bool      );
+   LOAD_PARA( load_mode, "Plummer_Collision_D",  &Plummer_Collision_D,   1.5,           NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_CenterX",      &Plummer_Center[0],     NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_CenterY",      &Plummer_Center[1],     NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_CenterZ",      &Plummer_Center[2],     NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_BulkVelX",     &Plummer_BulkVel[0],    0.0,           NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_BulkVelY",     &Plummer_BulkVel[1],    0.0,           NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_BulkVelZ",     &Plummer_BulkVel[2],    0.0,           NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_GasMFrac",     &Plummer_GasMFrac,      0.25,          Eps_double,       1.0               );
+   LOAD_PARA( load_mode, "Plummer_ExtAccMFrac",  &Plummer_ExtAccMFrac,   0.25,          0.0,              1.0               );
+   LOAD_PARA( load_mode, "Plummer_ExtPotMFrac",  &Plummer_ExtPotMFrac,   0.25,          0.0,              1.0               );
+   LOAD_PARA( load_mode, "Plummer_MassProfNBin", &Plummer_MassProfNBin,  1000,          2,                NoMax_int         );
+   LOAD_PARA( load_mode, "Plummer_AddColor",     &Plummer_AddColor,      false,         Useless_bool,     Useless_bool      );
+#  ifdef FEEDBACK
+   LOAD_PARA( load_mode, "Plummer_FB_Exp",       &Plummer_FB_Exp,        false,         Useless_bool,     Useless_bool      );
+   LOAD_PARA( load_mode, "Plummer_FB_ExpEMin",   &Plummer_FB_ExpEMin,    1.0,           0.0,              NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_FB_ExpEMax",   &Plummer_FB_ExpEMax,    10.0,          0.0,              NoMax_double      );
+   LOAD_PARA( load_mode, "Plummer_FB_ExpMMin",   &Plummer_FB_ExpMMin,    0.0,           0.0,              1.0               );
+   LOAD_PARA( load_mode, "Plummer_FB_ExpMMax",   &Plummer_FB_ExpMMax,    1.0e-5,        0.0,              1.0               );
+   LOAD_PARA( load_mode, "Plummer_FB_Acc",       &Plummer_FB_Acc,        false,         Useless_bool,     Useless_bool      );
+   LOAD_PARA( load_mode, "Plummer_FB_AccMMin",   &Plummer_FB_AccMMin,    0.0,           0.0,              1.0               );
+   LOAD_PARA( load_mode, "Plummer_FB_AccMMax",   &Plummer_FB_AccMMax,    1.0e-2,        0.0,              1.0               );
+   LOAD_PARA( load_mode, "Plummer_FB_Like",      &Plummer_FB_Like,       1.0e-4,        0.0,              1.0               );
+#  endif
+
+} // FUNCTION : LoadInputTestProb
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    :  SetParameter
 // Description :  Load and set the problem-specific runtime parameters
 //
@@ -118,32 +203,11 @@ void SetParameter()
 
 
 // (1) load the problem-specific runtime parameters
+// (1-1) read parameters from Input__TestProb
    const char FileName[] = "Input__TestProb";
    ReadPara_t *ReadPara  = new ReadPara_t;
 
-// (1-1) add parameters in the following format:
-// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
-// --> some handy constants (e.g., Useless_bool, Eps_double, NoMin_int, ...) are defined in "include/ReadPara.h"
-// ********************************************************************************************************************************
-// ReadPara->Add( "KEY_IN_THE_FILE",      &VARIABLE,              DEFAULT,       MIN,              MAX               );
-// ********************************************************************************************************************************
-   ReadPara->Add( "Plummer_RSeed",        &Plummer_RSeed,         123,           0,                NoMax_int         );
-   ReadPara->Add( "Plummer_Rho0",         &Plummer_Rho0,          1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Plummer_R0",           &Plummer_R0,            0.1,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Plummer_MaxR",         &Plummer_MaxR,          0.375,         Eps_double,       NoMax_double      );
-   ReadPara->Add( "Plummer_Collision",    &Plummer_Collision,     false,         Useless_bool,     Useless_bool      );
-   ReadPara->Add( "Plummer_Collision_D",  &Plummer_Collision_D,   1.5,           NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_CenterX",      &Plummer_Center[0],     NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_CenterY",      &Plummer_Center[1],     NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_CenterZ",      &Plummer_Center[2],     NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_BulkVelX",     &Plummer_BulkVel[0],    0.0,           NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_BulkVelY",     &Plummer_BulkVel[1],    0.0,           NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_BulkVelZ",     &Plummer_BulkVel[2],    0.0,           NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Plummer_GasMFrac",     &Plummer_GasMFrac,      0.25,          Eps_double,       1.0               );
-   ReadPara->Add( "Plummer_ExtAccMFrac",  &Plummer_ExtAccMFrac,   0.25,          0.0,              1.0               );
-   ReadPara->Add( "Plummer_ExtPotMFrac",  &Plummer_ExtPotMFrac,   0.25,          0.0,              1.0               );
-   ReadPara->Add( "Plummer_MassProfNBin", &Plummer_MassProfNBin,  1000,          2,                NoMax_int         );
-   ReadPara->Add( "Plummer_AddColor",     &Plummer_AddColor,      false,         Useless_bool,     Useless_bool      );
+   LoadInputTestProb( LOAD_READPARA, ReadPara, NULL );
 
    ReadPara->Read( FileName );
 
@@ -164,17 +228,13 @@ void SetParameter()
    if ( !OPT__EXT_ACC  &&  Plummer_ExtAccMFrac != 0.0 )
    {
       Plummer_ExtAccMFrac = 0.0;
-
-      if ( MPI_Rank == 0 )
-         Aux_Message( stderr, "WARNING : \"Plummer_ExtAccMFrac\" is reset to 0.0 since OPT__EXT_ACC is disabled !!\n" );
+      PRINT_RESET_PARA( Plummer_ExtAccMFrac, FORMAT_REAL, "since OPT__EXT_ACC is disabled" );
    }
 
    if ( !OPT__EXT_POT  &&  Plummer_ExtPotMFrac != 0.0 )
    {
       Plummer_ExtPotMFrac = 0.0;
-
-      if ( MPI_Rank == 0 )
-         Aux_Message( stderr, "WARNING : \"Plummer_ExtPotMFrac\" is reset to 0.0 since OPT__EXT_POT is disabled !!\n" );
+      PRINT_RESET_PARA( Plummer_ExtPotMFrac, FORMAT_REAL, "since OPT__EXT_POT is disabled" );
    }
 #  endif
 
@@ -200,9 +260,7 @@ void SetParameter()
       if (  ! Mis_CompareRealValue( NonParMFrac, 1.0, NULL, false )  )
       {
          Plummer_GasMFrac = 1.0 - Plummer_ExtAccMFrac - Plummer_ExtPotMFrac;
-
-         if ( MPI_Rank == 0 )
-            Aux_Message( stderr, "WARNING : \"Plummer_GasMFrac\" is reset to %13.7e !!\n", Plummer_GasMFrac );
+         PRINT_RESET_PARA( Plummer_GasMFrac, FORMAT_REAL, "" );
       }
 #     endif
    } // if ( OPT__SELF_GRAVITY )
@@ -222,9 +280,7 @@ void SetParameter()
       if (  ! Mis_CompareRealValue( Plummer_GasMFrac, 1.0, NULL, false )  )
       {
          Plummer_GasMFrac = 1.0;
-
-         if ( MPI_Rank == 0 )
-            Aux_Message( stderr, "WARNING : \"Plummer_GasMFrac\" is reset to %13.7e !!\n", Plummer_GasMFrac );
+         PRINT_RESET_PARA( Plummer_GasMFrac, FORMAT_REAL, "" );
       }
 #     endif
 
@@ -236,9 +292,7 @@ void SetParameter()
             if (  ! Mis_CompareRealValue( Plummer_ExtAccMFrac+Plummer_ExtPotMFrac, 1.0, NULL, false )  )
             {
                Plummer_ExtPotMFrac = 1.0 - Plummer_ExtAccMFrac;
-
-               if ( MPI_Rank == 0 )
-                  Aux_Message( stderr, "WARNING : \"Plummer_ExtPotMFrac\" is reset to %13.7e !!\n", Plummer_ExtPotMFrac );
+               PRINT_RESET_PARA( Plummer_ExtPotMFrac, FORMAT_REAL, "" );
             }
          }
 
@@ -247,9 +301,7 @@ void SetParameter()
             if (  ! Mis_CompareRealValue( Plummer_ExtPotMFrac, 1.0, NULL, false )  )
             {
                Plummer_ExtPotMFrac = 1.0;
-
-               if ( MPI_Rank == 0 )
-                  Aux_Message( stderr, "WARNING : \"Plummer_ExtPotMFrac\" is reset to %13.7e !!\n", Plummer_ExtPotMFrac );
+               PRINT_RESET_PARA( Plummer_ExtPotMFrac, FORMAT_REAL, "" );
             }
          }
       } // if ( OPT__EXT_POT )
@@ -261,9 +313,7 @@ void SetParameter()
             if (  ! Mis_CompareRealValue( Plummer_ExtAccMFrac, 1.0, NULL, false )  )
             {
                Plummer_ExtAccMFrac = 1.0;
-
-               if ( MPI_Rank == 0 )
-                  Aux_Message( stderr, "WARNING : \"Plummer_ExtAccMFrac\" is reset to %13.7e !!\n", Plummer_ExtAccMFrac );
+               PRINT_RESET_PARA( Plummer_ExtAccMFrac, FORMAT_REAL, "" );
             }
          }
 
@@ -273,6 +323,31 @@ void SetParameter()
    } // if ( OPT__SELF_GRAVITY ) ... else ...
 #  endif // #ifdef GRAVITY
 
+#  ifdef FEEDBACK
+   if ( Plummer_FB_Exp )
+   {
+      if ( ! FB_USER )  Aux_Error( ERROR_INFO, "must enable FB_USER for Plummer_FB_Exp !!\n" );
+
+      if ( Plummer_FB_ExpEMin > Plummer_FB_ExpEMax )
+         Aux_Error( ERROR_INFO, "Plummer_FB_ExpEMin (%13.7e) > Plummer_FB_ExpEMax (%13.7e) !!\n",
+                    Plummer_FB_ExpEMin, Plummer_FB_ExpEMax );
+
+      if ( Plummer_FB_ExpMMin > Plummer_FB_ExpMMax )
+         Aux_Error( ERROR_INFO, "Plummer_FB_ExpMMin (%13.7e) > Plummer_FB_ExpMMax (%13.7e) !!\n",
+                    Plummer_FB_ExpMMin, Plummer_FB_ExpMMax );
+   }
+
+   if ( Plummer_FB_Acc )
+   {
+      if ( ! FB_USER )  Aux_Error( ERROR_INFO, "must enable FB_USER for Plummer_FB_Acc !!\n" );
+
+      if ( Plummer_FB_AccMMin > Plummer_FB_AccMMax )
+         Aux_Error( ERROR_INFO, "Plummer_FB_AccMMin (%13.7e) > Plummer_FB_AccMMax (%13.7e) !!\n",
+                    Plummer_FB_AccMMin, Plummer_FB_AccMMax );
+   }
+#  endif
+
+
 // (2) set the problem-specific derived parameters
 #  ifdef GRAVITY
    Plummer_FreeT = sqrt( (3.0*M_PI*pow(2.0,1.5)) / (32.0*NEWTON_G*Plummer_Rho0) );
@@ -280,18 +355,18 @@ void SetParameter()
 
 
 // (3) reset other general-purpose parameters
-//     --> a helper macro PRINT_WARNING is defined in TestProb.h
+//     --> a helper macro PRINT_RESET_PARA is defined in Macro.h
    const long   End_Step_Default = __INT_MAX__;
    const double End_T_Default    = (Plummer_Collision) ? 50.0 : 20.0*Plummer_FreeT;
 
    if ( END_STEP < 0 ) {
       END_STEP = End_Step_Default;
-      PRINT_WARNING( "END_STEP", END_STEP, FORMAT_LONG );
+      PRINT_RESET_PARA( END_STEP, FORMAT_LONG, "" );
    }
 
    if ( END_T < 0.0 ) {
       END_T = End_T_Default;
-      PRINT_WARNING( "END_T", END_T, FORMAT_REAL );
+      PRINT_RESET_PARA( END_T, FORMAT_REAL, "" );
    }
 
 
@@ -319,8 +394,21 @@ void SetParameter()
       Aux_Message( stdout, "  external potential    mass fraction       = %13.7e\n", Plummer_ExtPotMFrac );
       Aux_Message( stdout, "  number of radial bins in the mass profile = %d\n",     Plummer_MassProfNBin );
       Aux_Message( stdout, "  free-fall time at the scale radius        = %13.7e\n", Plummer_FreeT );
+#     ifdef FEEDBACK
+      Aux_Message( stdout, "  explosion feedback                        = %d\n",     Plummer_FB_Exp );
+      if ( Plummer_FB_Exp ) {
+      Aux_Message( stdout, "     minimum energy gain factor             = %13.7e\n", Plummer_FB_ExpEMin );
+      Aux_Message( stdout, "     maximum energy gain factor             = %13.7e\n", Plummer_FB_ExpEMax );
+      Aux_Message( stdout, "     minimum mass loss factor               = %13.7e\n", Plummer_FB_ExpMMin );
+      Aux_Message( stdout, "     maximum mass loss factor               = %13.7e\n", Plummer_FB_ExpMMax ); }
+      Aux_Message( stdout, "  mass accretion feedback                   = %d\n",     Plummer_FB_Acc );
+      if ( Plummer_FB_Acc ) {
+      Aux_Message( stdout, "     minimum mass accretion factor          = %13.7e\n", Plummer_FB_AccMMin );
+      Aux_Message( stdout, "     maximum mass accretion factor          = %13.7e\n", Plummer_FB_AccMMax ); }
+      Aux_Message( stdout, "  feedback likelihood                       = %13.7e\n", Plummer_FB_Like );
+#     endif
       Aux_Message( stdout, "=============================================================================\n" );
-   }
+   } // if ( MPI_Rank == 0 )
 
 
    if ( MPI_Rank == 0 )    Aux_Message( stdout, "   Setting runtime parameters ... done\n" );
@@ -442,8 +530,8 @@ void AddNewField_Plummer()
 
    if ( Plummer_AddColor )
    {
-      Plummer_Idx_Cloud0 = AddField( "Cloud0", NORMALIZE_YES, INTERP_FRAC_YES );
-      Plummer_Idx_Cloud1 = AddField( "Cloud1", NORMALIZE_YES, INTERP_FRAC_YES );
+      Plummer_Idx_Cloud0 = AddField( "Cloud0", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_YES, NORMALIZE_YES, INTERP_FRAC_YES );
+      Plummer_Idx_Cloud1 = AddField( "Cloud1", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_YES, NORMALIZE_YES, INTERP_FRAC_YES );
    }
 
 } // FUNCTION : AddNewField_Plummer
@@ -476,15 +564,21 @@ void Init_TestProb_Hydro_Plummer()
    SetParameter();
 
 
-   Init_Function_User_Ptr  = SetGridIC;
-   Init_Field_User_Ptr     = AddNewField_Plummer;
-#  ifdef PARTICLE
-   Par_Init_ByFunction_Ptr = Par_Init_ByFunction_Plummer;
-#  endif
+   Init_Function_User_Ptr    = SetGridIC;
+   Init_Field_User_Ptr       = AddNewField_Plummer;
 #  ifdef GRAVITY
-   Init_ExtAcc_Ptr         = Init_ExtAcc_Plummer;
+   Init_ExtAcc_Ptr           = Init_ExtAcc_Plummer;
    if ( OPT__EXT_POT == EXT_POT_FUNC )
-   Init_ExtPot_Ptr         = Init_ExtPot_Plummer;
+   Init_ExtPot_Ptr           = Init_ExtPot_Plummer;
+#  ifdef MASSIVE_PARTICLES
+   Par_Init_ByFunction_Ptr   = Par_Init_ByFunction_Plummer;
+#  endif
+#  endif
+#  ifdef FEEDBACK
+   FB_Init_User_Ptr          = FB_Init_Plummer;
+#  endif
+#  ifdef SUPPORT_HDF5
+   Output_HDF5_InputTest_Ptr = LoadInputTestProb;
 #  endif
 #  endif // #if ( MODEL == HYDRO )
 

@@ -1,7 +1,7 @@
 
 #include "CUPOT.h"
 #ifdef __CUDACC__
-#include "CUAPI.h"
+#include "CUDA_CheckError.h"
 #endif
 
 #ifdef GRAVITY
@@ -26,23 +26,22 @@
 //                3. Add "#ifndef __CUDACC__" since this routine is only useful on CPU
 //
 // Parameter   :  AuxArray_Flt/Int : Floating-point/Integer arrays to be filled up
+//                Time             : Target physical time
 //
 // Return      :  AuxArray_Flt/Int[]
 //-------------------------------------------------------------------------------------------------------
-void SetExtPotAuxArray_ParEqmIC( double AuxArray_Flt[], int AuxArray_Int[] )
+void SetExtPotAuxArray_ParEqmIC( double AuxArray_Flt[], int AuxArray_Int[], const double Time )
 {
-   double ParEqmIC_Rho0 = 1.0;
-   double ParEqmIC_R0   = 0.1;
-   double ParEqmIC_Center[3] ={1.5,1.5,1.5};
-   double ParEqmIC_ExtPotMFrac = 1.0;
-// potential = -G*M/(r^2+R0^2)^(1/2)
-   const double ExtPotM = (4.0/3.0)*M_PI*CUBE(ParEqmIC_R0)*ParEqmIC_Rho0*ParEqmIC_ExtPotMFrac;
+// This external potential is the potential of the Plummer model = -G*M0/(r^2+R0^2)^(1/2)
+   const double Plummer_Rho0 = 80.0;
+   const double Plummer_R0   = 0.05;
+   const double Plummer_M0   = (4.0/3.0)*M_PI*CUBE(Plummer_R0)*Plummer_Rho0;
 
-   AuxArray_Flt[0] = ParEqmIC_Center[0];   // x coordinate of the potential center
-   AuxArray_Flt[1] = ParEqmIC_Center[1];   // y ...
-   AuxArray_Flt[2] = ParEqmIC_Center[2];   // z ...
-   AuxArray_Flt[3] = SQR( ParEqmIC_R0 );   // scale_radius^2
-   AuxArray_Flt[4] = -NEWTON_G*ExtPotM;   // -G*M
+   AuxArray_Flt[0] = amr->BoxCenter[0];     // x coordinate of the potential center
+   AuxArray_Flt[1] = amr->BoxCenter[1];     // y ...
+   AuxArray_Flt[2] = amr->BoxCenter[2];     // z ...
+   AuxArray_Flt[3] = SQR( Plummer_R0 );     // scale_radius^2
+   AuxArray_Flt[4] = -NEWTON_G*Plummer_M0;  // -G*M0
 
 } // FUNCTION : SetExtPotAuxArray_ParEqmIC
 #endif // #ifndef __CUDACC__
@@ -80,12 +79,12 @@ static real ExtPot_ParEqmIC( const double x, const double y, const double z, con
                                      const ExtPotUsage_t Usage, const real PotTable[], void **GenePtr )
 {
 
-// potential = -G*M/(r^2+R0^2)^(1/2)
+// This external potential is the potential of the Plummer model = -G*M0/(r^2+R0^2)^(1/2)
    const double cx  =       UserArray_Flt[0];   // x coordinate of the potential center
    const double cy  =       UserArray_Flt[1];   // y ...
    const double cz  =       UserArray_Flt[2];   // z ...
    const real   a2  = (real)UserArray_Flt[3];   // scale_radius^2
-   const real   mGM = (real)UserArray_Flt[4];   // -G*M
+   const real   mGM = (real)UserArray_Flt[4];   // -G*M0
 
    const real   dx  = (real)(x - cx);
    const real   dy  = (real)(y - cy);
@@ -142,7 +141,7 @@ void SetCPUExtPot_ParEqmIC( ExtPot_t &CPUExtPot_Ptr )
 #ifndef __CUDACC__
 
 // local function prototypes
-void SetExtPotAuxArray_ParEqmIC( double [], int [] );
+void SetExtPotAuxArray_ParEqmIC( double [], int [], const double );
 void SetCPUExtPot_ParEqmIC( ExtPot_t & );
 #ifdef GPU
 void SetGPUExtPot_ParEqmIC( ExtPot_t & );
@@ -166,7 +165,7 @@ void SetGPUExtPot_ParEqmIC( ExtPot_t & );
 void Init_ExtPot_ParEqmIC()
 {
 
-   SetExtPotAuxArray_ParEqmIC( ExtPot_AuxArray_Flt, ExtPot_AuxArray_Int );
+   SetExtPotAuxArray_ParEqmIC( ExtPot_AuxArray_Flt, ExtPot_AuxArray_Int, Time[0] );
    SetCPUExtPot_ParEqmIC( CPUExtPot_Ptr );
 #  ifdef GPU
    SetGPUExtPot_ParEqmIC( GPUExtPot_Ptr );

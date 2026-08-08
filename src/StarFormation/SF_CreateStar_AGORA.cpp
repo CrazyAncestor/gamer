@@ -17,6 +17,7 @@
 //                3. One must invoke Buf_GetBufferData( ..., _TOTAL, ... ) after calling this function
 //                4. Currently this function does not check whether the cell mass exceeds the Jeans mass
 //                   --> Ref: "jeanmass" in star_maker_ssn.F of Enzo
+//                5. The new particle UID should be initialized as PUID_TBA. The actual PUID will be assigned later in SF_CreateStar()
 //
 // Parameter   :  lv           : Target refinement level
 //                TimeNew      : Current physical time (after advancing solution by dt)
@@ -94,9 +95,10 @@ void SF_CreateStar_AGORA( const int lv, const real TimeNew, const real dt, Rando
    real   (*pot_ext)[GRA_NXT][GRA_NXT] = NULL;
 #  endif
 
-   const int MaxNewParPerPatch = CUBE(PS1);
-   real   (*NewParAtt)[PAR_NATT_TOTAL] = new real [MaxNewParPerPatch][PAR_NATT_TOTAL];
-   long    *NewParID                   = new long [MaxNewParPerPatch];
+   const int    MaxNewParPerPatch = CUBE(PS1);
+   real_par   (*NewParAttFlt)[PAR_NATT_FLT_TOTAL] = new real_par [MaxNewParPerPatch][PAR_NATT_FLT_TOTAL];
+   long_par   (*NewParAttInt)[PAR_NATT_INT_TOTAL] = new long_par [MaxNewParPerPatch][PAR_NATT_INT_TOTAL];
+   long        *NewParID                          = new long     [MaxNewParPerPatch];
 
    int NNewPar;
 
@@ -195,14 +197,17 @@ void SF_CreateStar_AGORA( const int lv, const real TimeNew, const real dt, Rando
          y        = y0 + j*dh;
          z        = z0 + k*dh;
 
-         NewParAtt[NNewPar][PAR_MASS] = StarMass;
-         NewParAtt[NNewPar][PAR_POSX] = x;
-         NewParAtt[NNewPar][PAR_POSY] = y;
-         NewParAtt[NNewPar][PAR_POSZ] = z;
-         NewParAtt[NNewPar][PAR_VELX] = fluid[MOMX][k][j][i]*_GasDens;
-         NewParAtt[NNewPar][PAR_VELY] = fluid[MOMY][k][j][i]*_GasDens;
-         NewParAtt[NNewPar][PAR_VELZ] = fluid[MOMZ][k][j][i]*_GasDens;
-         NewParAtt[NNewPar][PAR_TIME] = TimeNew;
+         NewParAttFlt[NNewPar][PAR_MASS] = StarMass;
+         NewParAttFlt[NNewPar][PAR_POSX] = x;
+         NewParAttFlt[NNewPar][PAR_POSY] = y;
+         NewParAttFlt[NNewPar][PAR_POSZ] = z;
+         NewParAttFlt[NNewPar][PAR_VELX] = fluid[MOMX][k][j][i]*_GasDens;
+         NewParAttFlt[NNewPar][PAR_VELY] = fluid[MOMY][k][j][i]*_GasDens;
+         NewParAttFlt[NNewPar][PAR_VELZ] = fluid[MOMZ][k][j][i]*_GasDens;
+         NewParAttFlt[NNewPar][PAR_TIME] = TimeNew;
+         NewParAttInt[NNewPar][PAR_TYPE] = PTYPE_STAR;
+         NewParAttInt[NNewPar][PAR_PUID] = PUID_TBA;
+         NewParAttInt[NNewPar][PAR_FLAG] = PFLAG_NO;
 
 //       particle acceleration
 #        ifdef STORE_PAR_ACC
@@ -232,18 +237,18 @@ void SF_CreateStar_AGORA( const int lv, const real TimeNew, const real dt, Rando
             GasAcc[2] += GraConst*( pot_zp - pot_zm );
          }
 
-         NewParAtt[NNewPar][PAR_ACCX] = GasAcc[0];
-         NewParAtt[NNewPar][PAR_ACCY] = GasAcc[1];
-         NewParAtt[NNewPar][PAR_ACCZ] = GasAcc[2];
+         NewParAttFlt[NNewPar][PAR_ACCX] = GasAcc[0];
+         NewParAttFlt[NNewPar][PAR_ACCY] = GasAcc[1];
+         NewParAttFlt[NNewPar][PAR_ACCZ] = GasAcc[2];
 #        endif // ifdef STORE_PAR_ACC
 
 
 //       2-2. extrinsic attributes
 //       note that we store the metal mass **fraction** instead of density in particles
          if ( UseMetal )
-         NewParAtt[NNewPar][Idx_ParMetalFrac] = fluid[Idx_Metal][k][j][i] * _GasDens;
+         NewParAttFlt[NNewPar][Idx_ParMetalFrac] = fluid[Idx_Metal][k][j][i] * _GasDens;
 
-         NewParAtt[NNewPar][Idx_ParCreTime  ] = TimeNew;
+         NewParAttFlt[NNewPar][Idx_ParCreTime  ] = TimeNew;
 
          NNewPar ++;
 
@@ -262,7 +267,7 @@ void SF_CreateStar_AGORA( const int lv, const real TimeNew, const real dt, Rando
 //    ===========================================================================================================
 //    use OpenMP critical construct since both amr->Par->AddOneParticle() and amr->patch[0][lv][PID]->AddParticle()
 //    will modify some global variables
-//    --> note that the order of which thread calls amr->Par->AddOneParticle() is nondeterministic and may change from run to run
+//    --> note that the order of which thread calls amr->Par->AddOneParticle() is non-deterministic and may change from run to run
 //        --> order of particles stored in the particle repository (i.e., their particle ID) may change from run to run
 //        --> particle text file may change from run to run since it's dumped according to the order of particle ID
 //    --> but it's not an issue since the actual data of each particle will not be affected
@@ -270,32 +275,33 @@ void SF_CreateStar_AGORA( const int lv, const real TimeNew, const real dt, Rando
       {
 //       4-1. add particles to the particle repository
          for (int p=0; p<NNewPar; p++)
-            NewParID[p] = amr->Par->AddOneParticle( NewParAtt[p] );
+            NewParID[p] = amr->Par->AddOneParticle( NewParAttFlt[p], NewParAttInt[p] );
 
 
 //       4-2. add particles to the patch
+         const long_par *PType = amr->Par->Type;
 #        ifdef DEBUG_PARTICLE
 //       do not set ParPos too early since pointers to the particle repository (e.g., amr->Par->PosX)
 //       may change after calling amr->Par->AddOneParticle()
-         const real *ParPos[3] = { amr->Par->PosX, amr->Par->PosY, amr->Par->PosZ };
+         const real_par *ParPos[3] = { amr->Par->PosX, amr->Par->PosY, amr->Par->PosZ };
          char Comment[100];
          sprintf( Comment, "%s", __FUNCTION__ );
 
          amr->patch[0][lv][PID]->AddParticle( NNewPar, NewParID, &amr->Par->NPar_Lv[lv],
-                                              ParPos, amr->Par->NPar_AcPlusInac, Comment );
+                                              PType, ParPos, amr->Par->NPar_AcPlusInac, Comment );
 #        else
-         amr->patch[0][lv][PID]->AddParticle( NNewPar, NewParID, &amr->Par->NPar_Lv[lv] );
+         amr->patch[0][lv][PID]->AddParticle( NNewPar, NewParID, &amr->Par->NPar_Lv[lv], PType );
 #        endif
       } // pragma omp critical
 
    } // for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++)
 
 // free memory
-   delete [] NewParAtt;
+   delete [] NewParAttFlt;
+   delete [] NewParAttInt;
    delete [] NewParID;
 
    } // end of OpenMP parallel region
-
 
 // get the total number of active particles in all MPI ranks
    MPI_Allreduce( &amr->Par->NPar_Active, &amr->Par->NPar_Active_AllRank, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD );

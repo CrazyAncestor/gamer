@@ -6,9 +6,9 @@
 static void CollectParticle( const int FaLv, const int FaPID, int &NPar_SoFar, long *ParList );
 #endif
 
-// flag (declared in Prepare_PatchData.cpp) for checking whether Par_CollectParticle2OneLevel() has been called before
-// preparing either _PAR_DENS or _TOTAL_DENS data in Prepare_PatchData()
-extern bool Particle_Collected;
+// flag for checking whether Par_CollectParticle2OneLevel() has been called
+// --> mainly for preparing either _PAR_DENS or _TOTAL_DENS data in Prepare_PatchData()
+bool Particle_Collected = false;
 
 
 
@@ -31,18 +31,18 @@ extern bool Particle_Collected;
 //                       It's because particles travelling from coarse to fine grids will stay in coarse grids
 //                       temporarily until the velocity correction is done.
 //                       --> For these patches, NPar_Copy will be **the sum of NPar and the number of particles
-//                           collected from other patches**, and ParList_Copy (or ParAtt_Copy) will contain
+//                           collected from other patches**, and ParList_Copy (or ParAttFlt_Copy and ParAttInt_Copy) will contain
 //                           information of particles belonging to NPar as well.
 //                       --> It makes implementation simplier. **For leaf real patches, one only needs to consider
-//                           NPar and ParList. While for all other patches, one only needs to consider NPar_Copy,
-//                           ParList_Copy (or ParAtt_Copy). One never needs to consider both.**
+//                           NPar and ParList. While for all other patches, one only needs to consider NPar_Copy and
+//                           ParList_Copy (or ParAttFlt_Copy and ParAttInt_Copy). One never needs to consider both.**
 //                5. When using OpenMP, one must ensure that different threads do NOT invoke this function
 //                   for the same patch at the same time !!!
 //                   --> Because this function will modify "NPar_Copy & ParList_Copy" for the target patch
 //                6. Invoked by Gra_AdvanceDt(), Flag_Real(), Output_DumpData_Total(), Output_DumpData_Total_HDF(),
 //                   and Flu_CorrAfterAllSync()
 //                7. When turning on SibBufPatch in LOAD_BALANCE, this function (which will call
-//                   Par_LB_CollectParticle2OneLevel) will also collect particles for sibling-buffer patchesat FaLv
+//                   Par_LB_CollectParticle2OneLevel) will also collect particles for sibling-buffer patches at FaLv
 //                   --> Moreover, if FaSibBufPatch is also on, it will also collect particles for
 //                       father-sibling-buffer patches at FaLv-1 (if FaLv > 0)
 //                       --> Useful for constructing the density field at FaLv for the Poisson solver at FaLv
@@ -50,11 +50,16 @@ extern bool Particle_Collected;
 //                   --> Do NOT collect particle indices
 //                       --> ParList_Copy will NOT be allocated
 //                   --> Particle count is stored in NPar_Copy
+//                9. Only the master thread in OpenMP is allowed to call this routine
 //
 // Parameter   :  FaLv          : Target refinement leve
-//                AttBitIdx     : Bitwise indices of the target particle attributes (e.g., _PAR_MASS | _PAR_VELX)
-//                                --> A user-defined attribute with an integer index AttIntIdx returned by
-//                                    AddParticleAttribute() can be converted to a bitwise index by BIDX(AttIntIdx)
+//                FltAttBitIdx  : Bitwise indices of the target particle floating-point attributes (e.g., _PAR_MASS | _PAR_VELX)
+//                                --> A user-defined attribute with an integer index FltAttIntIdx returned by
+//                                    AddParticleAttributeFlt() can be converted to a bitwise index by BIDX(FltAttIntIdx)
+//                                --> Used by LOAD_BALANCE only
+//                IntAttBitIdx  : Bitwise indices of the target particle integer attributes (e.g., _PAR_TYPE)
+//                                --> A user-defined attribute with an integer index IntAttIntIdx returned by
+//                                    AddParticleAttributeInt() can be converted to a bitwise index by BIDX(IntAttIntIdx)
 //                                --> Used by LOAD_BALANCE only
 //                PredictPos    : true --> Predict particle position to TargetTime (for LOAD_BALANCE only)
 //                TargetTime    : Target time for predicting the particle position (for LOAD_BALANCE only)
@@ -64,15 +69,22 @@ extern bool Particle_Collected;
 //                                         (do nothing if FaLv==0) (for LOAD_BALANCE only)
 //                JustCountNPar : Just count the number of particles in each real patch at FaLv. Don't collect
 //                                particle indices (or collect particle mass and position for LOAD_BALANCE)
-//                TimingSendPar : Measure the elapsed time of the routine "Par_LB_SendParticleData" in
-//                                Par_LB_CollectParticle2OneLevel (for LOAD_BALANCE only)
+//                TimingSendPar : Measure the elapsed time of Par_LB_SendParticleData() in
+//                                Par_LB_CollectParticle2OneLevel() (for LOAD_BALANCE only)
 //
 // Return      :  NPar_Copy and ParList_Copy (if JustCountNPar == false) for all non-leaf real patches at FaLv
 //-------------------------------------------------------------------------------------------------------
-void Par_CollectParticle2OneLevel( const int FaLv, const long AttBitIdx, const bool PredictPos, const double TargetTime,
-                                   const bool SibBufPatch, const bool FaSibBufPatch, const bool JustCountNPar,
-                                   const bool TimingSendPar )
+void Par_CollectParticle2OneLevel( const int FaLv, const long FltAttBitIdx, const long IntAttBitIdx,
+                                   const bool PredictPos, const double TargetTime, const bool SibBufPatch,
+                                   const bool FaSibBufPatch, const bool JustCountNPar, const bool TimingSendPar )
 {
+
+// check
+#  ifdef OPENMP
+   const int TID = omp_get_thread_num();
+   if ( TID != 0 )   Aux_Error( ERROR_INFO, "only the master thread is allowed to call %s() (thread ID %d) !!\n", __FUNCTION__, TID );
+#  endif
+
 
 // set this flag to true to indicate that this function has been called
 // --> must be set before invoking the load-balance alternative routine Par_LB_CollectParticle2OneLevel()
@@ -83,7 +95,7 @@ void Par_CollectParticle2OneLevel( const int FaLv, const long AttBitIdx, const b
 #  ifdef LOAD_BALANCE
 // note that if SibBufPatch or FaSibBufPatch is on, we need to call Par_LB_CollectParticle2OneLevel()
 // even when FaLv == MAX_LEVEL
-   Par_LB_CollectParticle2OneLevel( FaLv, AttBitIdx, PredictPos, TargetTime, SibBufPatch, FaSibBufPatch, JustCountNPar, TimingSendPar );
+   Par_LB_CollectParticle2OneLevel( FaLv, FltAttBitIdx, IntAttBitIdx, PredictPos, TargetTime, SibBufPatch, FaSibBufPatch, JustCountNPar, TimingSendPar );
 
    return;
 
@@ -126,9 +138,9 @@ void Par_CollectParticle2OneLevel( const int FaLv, const long AttBitIdx, const b
       {
          const long ParID = amr->patch[0][FaLv][FaPID]->ParList[p];
 
-         if ( amr->Par->Time[ParID] >= (real)0.0 )
-            Aux_Error( ERROR_INFO, "This particle shouldn't be here (FaLv %d, FaPID %d, ParID %ld, ParTime %21.14e) !!\n",
-                       FaLv, FaPID, ParID, amr->Par->Time[ParID] );
+         if ( amr->Par->Time[ParID] >= (real_par)0.0  &&  amr->Par->Type[ParID] != PTYPE_TRACER )
+            Aux_Error( ERROR_INFO, "This particle shouldn't be here (FaLv %d, FaPID %d, ParID %ld, ParTime %21.14e, ParType %d) !!\n",
+                       FaLv, FaPID, ParID, amr->Par->Time[ParID], (int)amr->Par->Type[ParID] );
       }
 #     endif
 
@@ -178,6 +190,7 @@ void Par_CollectParticle2OneLevel( const int FaLv, const long AttBitIdx, const b
 // Note        :  1. Invoded by Gra_AdvanceDt (and Main when DEBUG is on)
 //                2. For LOAD_BALANCE, this function will call the alternative function
 //                   "Par_LB_CollectParticle2OneLevel_FreeMemory"
+//                3. Only the master thread in OpenMP is allowed to call this routine
 //
 // Parameter   :  FaLv          : Target refinement leve
 //                SibBufPatch   : true --> Release memory for sibling-buffer patches at FaLv as well (for LOAD_BALANCE only)
@@ -189,11 +202,18 @@ void Par_CollectParticle2OneLevel( const int FaLv, const long AttBitIdx, const b
 void Par_CollectParticle2OneLevel_FreeMemory( const int FaLv, const bool SibBufPatch, const bool FaSibBufPatch )
 {
 
-// set this flag to false to indicate that Par_CollectParticle2OneLevel has NOT been called
-// --> must be set before invoking the load-balance alternative routine "Par_LB_CollectParticle2OneLevel_FreeMemory"
-   Particle_Collected = false;
+// skip if Par_CollectParticle2OneLevel() has not been called
+   if ( ! Particle_Collected )   return;
 
 
+// check
+#  ifdef OPENMP
+   const int TID = omp_get_thread_num();
+   if ( TID != 0 )   Aux_Error( ERROR_INFO, "only the master thread is allowed to call %s() (thread ID %d) !!\n", __FUNCTION__, TID );
+#  endif
+
+
+// call the parallel version instead
 #  ifdef LOAD_BALANCE
 
    Par_LB_CollectParticle2OneLevel_FreeMemory( FaLv, SibBufPatch, FaSibBufPatch );
@@ -213,6 +233,10 @@ void Par_CollectParticle2OneLevel_FreeMemory( const int FaLv, const bool SibBufP
    }
 
 #  endif // #ifdef LOAD_BALANCE ... else ...
+
+
+// mark that Par_CollectParticle2OneLevel() has completed
+   Particle_Collected = false;
 
 } // FUNCTION : Par_CollectParticle2OneLevel_FreeMemory
 

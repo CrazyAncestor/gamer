@@ -129,7 +129,8 @@ void MHD_Aux_Check_DivergenceB( const bool Verbose, const char *comment )
    if ( MPI_Rank == 0 )
    {
       static bool FirstTime = true;
-      const char *FileName  = "Record__DivB";
+      char FileName[2*MAX_STRING];
+      sprintf( FileName, "%s/Record__DivB", OUTPUT_DIR );
 
 //    output header
       if ( FirstTime )
@@ -156,7 +157,7 @@ void MHD_Aux_Check_DivergenceB( const bool Verbose, const char *comment )
 
 
    if ( Pass  &&  Verbose  &&  MPI_Rank == 0 )
-      Aux_Message( stdout, "\"%s\" : <%s> PASSED, Time = %13.7e, Step = %ld \n",
+      Aux_Message( stdout, "\"%s\" : <%s> PASSED, Time = %13.7e, Step = %ld\n",
                    comment, __FUNCTION__, Time[0], Step );
 
 } // FUNCTION : MHD_Aux_Check_DivergenceB

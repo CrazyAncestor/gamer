@@ -26,6 +26,7 @@ void End_MemFree()
       for (int PID=0; PID<amr->num[lv]; PID++)
       {
          amr->patch[0][lv][PID]->NPar = 0;
+         for (int i=0; i<PAR_NTYPE; i++) amr->patch[0][lv][PID]->NParType[i] = 0;
          free( amr->patch[0][lv][PID]->ParList );
          amr->patch[0][lv][PID]->ParList = NULL;
       }
@@ -55,12 +56,7 @@ void End_MemFree()
 #  endif
 
 #  ifdef SUPPORT_GRACKLE
-   if ( GRACKLE_ACTIVATE )
-   {
-      End_MemFree_Grackle();
-
-      delete Che_FieldData;   Che_FieldData = NULL;
-   }
+   if ( GRACKLE_ACTIVATE )    End_MemFree_Grackle();
 #  endif
 
 
@@ -91,6 +87,16 @@ void End_MemFree()
 
 // 9. table of refinement region for OPT__UM_IC_NLEVEL>1
    delete [] UM_IC_RefineRegion;    UM_IC_RefineRegion = NULL;
+
+
+// 10. global AMR structure
+   delete GlobalTree;   GlobalTree = NULL;
+
+
+// 11. EintBk[] declared in Hydro_RestoreEint.cpp
+#  if ( MODEL == HYDRO )
+   Hydro_RestoreEint_MemFree();
+#  endif
 
 
    if ( MPI_Rank == 0 )    Aux_Message( stdout, "done\n" );

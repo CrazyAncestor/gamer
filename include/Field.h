@@ -26,10 +26,8 @@ SET_GLOBAL( FieldIdx_t Idx_Engy,          Idx_Undefined );
 #ifdef COSMIC_RAY
 SET_GLOBAL( FieldIdx_t Idx_CRay,          Idx_Undefined );
 #endif
-#if   ( DUAL_ENERGY == DE_ENPY )
-SET_GLOBAL( FieldIdx_t Idx_Enpy,          Idx_Undefined );
-#elif ( DUAL_ENERGY == DE_EINT )
-SET_GLOBAL( FieldIdx_t Idx_Eint,          Idx_Undefined );
+#ifdef DUAL_ENERGY
+SET_GLOBAL( FieldIdx_t Idx_Dual,          Idx_Undefined );
 #endif
 
 // Grackle fields
@@ -49,6 +47,20 @@ SET_GLOBAL( FieldIdx_t Idx_Metal,         Idx_Undefined );
 
 
 #elif ( MODEL == ELBDM )
+
+#if   ( ELBDM_SCHEME == ELBDM_WAVE )
+SET_GLOBAL( FieldIdx_t Idx_Dens,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_Real,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_Imag,          Idx_Undefined );
+#elif ( ELBDM_SCHEME == ELBDM_HYBRID )
+SET_GLOBAL( FieldIdx_t Idx_Dens,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_Real,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_Imag,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_Phas,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_Stub,          Idx_Undefined );
+#else
+#  error : ERROR : unsupported ELBDM_SCHEME !!
+#endif // # if ( ELBDM_SCHEME == ELBDM_HYBRID )
 
 #else
 #  error : ERROR : unsupported MODEL !!
@@ -72,6 +84,9 @@ SET_GLOBAL( FieldIdx_t Idx_ParVelX,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParVelY,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParVelZ,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParTime,       Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_ParType,       Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_ParPUID,       Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_ParFlag,       Idx_Undefined );
 #ifdef STORE_PAR_ACC
 SET_GLOBAL( FieldIdx_t Idx_ParAccX,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParAccY,       Idx_Undefined );
@@ -91,10 +106,11 @@ SET_GLOBAL( char FieldLabel[NCOMP_TOTAL][MAX_STRING] );
 SET_GLOBAL( const char *PotLabel, "Pote" );  // potential label is currently fixed
 #endif
 #ifdef MHD
-SET_GLOBAL( char *MagLabel[NCOMP_MAG] );
+SET_GLOBAL( char MagLabel[NCOMP_MAG][MAX_STRING] );
 #endif
 #ifdef PARTICLE
-SET_GLOBAL( char ParAttLabel[PAR_NATT_TOTAL][MAX_STRING] );
+SET_GLOBAL( char ParAttFltLabel[PAR_NATT_FLT_TOTAL][MAX_STRING] );
+SET_GLOBAL( char ParAttIntLabel[PAR_NATT_INT_TOTAL][MAX_STRING] );
 #endif
 
 

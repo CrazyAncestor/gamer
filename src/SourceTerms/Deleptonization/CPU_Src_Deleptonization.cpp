@@ -7,7 +7,8 @@
 // external functions and GPU-related set-up
 #ifdef __CUDACC__
 
-#include "CUAPI.h"
+#include "Global.h"
+#include "CUDA_CheckError.h"
 #include "CUFLU_Shared_FluUtility.cu"
 #include "CUDA_ConstMemory.h"
 
@@ -21,7 +22,10 @@ extern real  *d_SrcDlepProf_Radius;
 #ifndef __CUDACC__
 
 void Src_SetAuxArray_Deleptonization( double [], int [] );
-void Src_SetFunc_Deleptonization( SrcFunc_t & );
+void Src_SetCPUFunc_Deleptonization( SrcFunc_t & );
+#ifdef GPU
+void Src_SetGPUFunc_Deleptonization( SrcFunc_t & );
+#endif
 void Src_SetConstMemory_Deleptonization( const double AuxArray_Flt[], const int AuxArray_Int[],
                                          double *&DevPtr_Flt, int *&DevPtr_Int );
 void Src_PassData2GPU_Deleptonization();
@@ -102,6 +106,7 @@ void Src_SetAuxArray_Deleptonization( double AuxArray_Flt[], int AuxArray_Int[] 
 //                TimeOld           : Physical time before update
 //                                    --> This function updates physical time from TimeOld to TimeNew
 //                MinDens/Pres/Eint : Density, pressure, and internal energy floors
+//                PassiveFloor      : Bitwise flag to specify the passive scalars to be floored
 //                EoS               : EoS object
 //                AuxArray_*        : Auxiliary arrays (see the Note above)
 //
@@ -112,7 +117,7 @@ static void Src_Deleptonization( real fluid[], const real B[],
                                  const SrcTerms_t *SrcTerms, const real dt, const real dh,
                                  const double x, const double y, const double z,
                                  const double TimeNew, const double TimeOld,
-                                 const real MinDens, const real MinPres, const real MinEint,
+                                 const real MinDens, const real MinPres, const real MinEint, const long PassiveFloor,
                                  const EoS_t *EoS, const double AuxArray_Flt[], const int AuxArray_Int[] )
 {
 
@@ -173,18 +178,19 @@ void Src_WorkBeforeMajorFunc_Deleptonization( const int lv, const double TimeNew
    const bool        LogBin         = true;
    const double      LogBinRatio    = 1.25;
    const bool        RemoveEmptyBin = true;
-   const long        TVar[]         = { _DENS, _MOMX, _ENGY, _PRES, _VELR, _EINT_DER };
+   const long        TVar[]         = { _DENS, _MOMX, _ENGY, _PRES, _VELR, _EINT };
    const int         NProf          = SRC_DLEP_PROF_NVAR;
    const int         SingleLv       = -1;
    const int         MaxLv          = -1;
    const PatchType_t PatchType      = PATCH_LEAF;
    const double      PrepTime       = TimeNew;
+   const bool        GetSigma_No    = false;
 
    Profile_t *Prof[SRC_DLEP_PROF_NVAR];
    for (int v=0; v<SRC_DLEP_PROF_NVAR; v++)  Prof[v] = new Profile_t();
 
    Aux_ComputeProfile( Prof, Center, MaxRadius, MinBinSize, LogBin, LogBinRatio, RemoveEmptyBin,
-                       TVar, NProf, SingleLv, MaxLv, PatchType, PrepTime );
+                       TVar, NProf, SingleLv, MaxLv, PatchType, PrepTime, GetSigma_No );
 
 
 // check and store the number of radial bins
@@ -267,12 +273,11 @@ void Src_PassData2GPU_Deleptonization()
 FUNC_SPACE SrcFunc_t SrcFunc_Ptr = Src_Deleptonization;
 
 //-----------------------------------------------------------------------------------------
-// Function    :  Src_SetFunc_Deleptonization
+// Function    :  Src_SetCPU/GPUFunc_Deleptonization
 // Description :  Return the function pointer of the CPU/GPU source-term function
 //
 // Note        :  1. Invoked by Src_Init_Deleptonization()
 //                2. Call-by-reference
-//                3. Use either CPU or GPU but not both of them
 //
 // Parameter   :  SrcFunc_CPU/GPUPtr : CPU/GPU function pointer to be set
 //
@@ -280,19 +285,19 @@ FUNC_SPACE SrcFunc_t SrcFunc_Ptr = Src_Deleptonization;
 //-----------------------------------------------------------------------------------------
 #ifdef __CUDACC__
 __host__
-void Src_SetFunc_Deleptonization( SrcFunc_t &SrcFunc_GPUPtr )
+void Src_SetGPUFunc_Deleptonization( SrcFunc_t &SrcFunc_GPUPtr )
 {
    CUDA_CHECK_ERROR(  cudaMemcpyFromSymbol( &SrcFunc_GPUPtr, SrcFunc_Ptr, sizeof(SrcFunc_t) )  );
 }
 
-#elif ( !defined GPU )
+#else
 
-void Src_SetFunc_Deleptonization( SrcFunc_t &SrcFunc_CPUPtr )
+void Src_SetCPUFunc_Deleptonization( SrcFunc_t &SrcFunc_CPUPtr )
 {
    SrcFunc_CPUPtr = SrcFunc_Ptr;
 }
 
-#endif // #ifdef __CUDACC__ ... elif ...
+#endif // #ifdef __CUDACC__ ... else ...
 
 
 
@@ -335,9 +340,7 @@ void Src_SetConstMemory_Deleptonization( const double AuxArray_Flt[], const int 
 //
 // Note        :  1. Set auxiliary arrays by invoking Src_SetAuxArray_*()
 //                   --> Copy to the GPU constant memory and store the associated addresses
-//                2. Set the source-term function by invoking Src_SetFunc_*()
-//                   --> Unlike other modules (e.g., EoS), here we use either CPU or GPU but not
-//                       both of them
+//                2. Set the source-term function by invoking Src_SetCPU/GPUFunc_*()
 //                3. Invoked by Src_Init()
 //                4. Add "#ifndef __CUDACC__" since this routine is only useful on CPU
 //
@@ -361,7 +364,14 @@ void Src_Init_Deleptonization()
 #  endif
 
 // set the major source-term function
-   Src_SetFunc_Deleptonization( SrcTerms.Dlep_FuncPtr );
+   Src_SetCPUFunc_Deleptonization( SrcTerms.Dlep_CPUPtr );
+
+#  ifdef GPU
+   Src_SetGPUFunc_Deleptonization( SrcTerms.Dlep_GPUPtr );
+   SrcTerms.Dlep_FuncPtr = SrcTerms.Dlep_GPUPtr;
+#  else
+   SrcTerms.Dlep_FuncPtr = SrcTerms.Dlep_CPUPtr;
+#  endif
 
 } // FUNCTION : Src_Init_Deleptonization
 

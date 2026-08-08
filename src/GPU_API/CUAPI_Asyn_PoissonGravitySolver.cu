@@ -7,19 +7,11 @@
 
 // Poisson solver prototypes
 #if   ( POT_SCHEME == SOR )
-#ifdef USE_PSOLVER_10TO14
-__global__ void CUPOT_PoissonSolver_SOR_10to14cube( const real g_Rho_Array    [][ RHO_NXT*RHO_NXT*RHO_NXT ],
-                                                    const real g_Pot_Array_In [][ POT_NXT*POT_NXT*POT_NXT ],
-                                                          real g_Pot_Array_Out[][ GRA_NXT*GRA_NXT*GRA_NXT ],
-                                                    const int Min_Iter, const int Max_Iter, const real Omega_6,
-                                                    const real Const, const IntScheme_t IntScheme );
-#else
-__global__ void CUPOT_PoissonSolver_SOR_16to18cube( const real g_Rho_Array    [][ RHO_NXT*RHO_NXT*RHO_NXT ],
-                                                    const real g_Pot_Array_In [][ POT_NXT*POT_NXT*POT_NXT ],
-                                                          real g_Pot_Array_Out[][ GRA_NXT*GRA_NXT*GRA_NXT ],
-                                                    const int Min_Iter, const int Max_Iter, const real Omega_6,
-                                                    const real Const, const IntScheme_t IntScheme );
-#endif // #ifdef USE_PSOLVER_10TO14 ... else ...
+__global__ void CUPOT_PoissonSolver_SOR( const real g_Rho_Array    [][ RHO_NXT*RHO_NXT*RHO_NXT ],
+                                         const real g_Pot_Array_In [][ POT_NXT*POT_NXT*POT_NXT ],
+                                               real g_Pot_Array_Out[][ GRA_NXT*GRA_NXT*GRA_NXT ],
+                                         const int Min_Iter, const int Max_Iter, const real Omega_6,
+                                         const real Const, const IntScheme_t IntScheme );
 
 #elif ( POT_SCHEME == MG  )
 __global__ void CUPOT_PoissonSolver_MG( const real g_Rho_Array    [][ RHO_NXT*RHO_NXT*RHO_NXT ],
@@ -56,11 +48,16 @@ void CUPOT_HydroGravitySolver(
 
 #elif ( MODEL == ELBDM )
 __global__
-void CUPOT_ELBDMGravitySolver(       real g_Flu_Array[][GRA_NIN][ PS1*PS1*PS1 ],
-                               const real g_Pot_Array[][ GRA_NXT*GRA_NXT*GRA_NXT ],
-                               const double g_Corner_Array[][3],
+void CUPOT_ELBDMGravitySolver(       real g_Flu_Array[][GRA_NIN][ CUBE(PS1) ],
+                               const real g_Pot_Array[][ CUBE(GRA_NXT) ],
                                const real EtaDt, const real dh, const real Lambda );
 
+#if ( ELBDM_SCHEME == ELBDM_HYBRID )
+__global__
+void CUPOT_ELBDMGravitySolver_HamiltonJacobi(       real g_Flu_Array[][GRA_NIN][ CUBE(PS1) ],
+                                              const real g_Pot_Array[][ CUBE(GRA_NXT) ],
+                                              const real EtaDt, const real dh, const real Lambda );
+#endif
 #else
 #error : ERROR : unsupported MODEL !!
 #endif // MODEL
@@ -111,7 +108,7 @@ extern cudaStream_t *Stream;
 //                **  will return before the execution in GPU is complete  **
 //                ***********************************************************
 //
-// Note        :  1. Use streams for the asychronous memory copy between device and host
+// Note        :  1. Use streams for the asynchronous memory copy between device and host
 //                2. Prefix "d" : for pointers pointing to the "Device" memory space
 //                   Prefix "h" : for pointers pointing to the "Host"   memory space
 //
@@ -153,6 +150,7 @@ extern cudaStream_t *Stream;
 //                TimeOld            : Physical time at the previous step (for external gravity in UNSPLIT_GRAVITY)
 //                MinEint            : Internal energy floor
 //                GPU_NStream        : Number of CUDA streams for the asynchronous memory copy
+//                UseWaveFlag        : Determine whether to use wave or phase scheme
 //
 // Useless parameters in HYDRO : ELBDM_Eta, ELBDM_Lambda
 // Useless parameters in ELBDM : P5_Gradient
@@ -174,7 +172,7 @@ void CUAPI_Asyn_PoissonGravitySolver( const real h_Rho_Array    [][RHO_NXT][RHO_
                                       const real ELBDM_Lambda, const bool Poisson, const bool GraAcc,
                                       const bool SelfGravity, const OptExtPot_t ExtPot, const OptExtAcc_t ExtAcc,
                                       const double TimeNew, const double TimeOld, const real MinEint,
-                                      const int GPU_NStream )
+                                      const int GPU_NStream, const bool UseWaveFlag )
 {
 
 // model-independent constants
@@ -219,17 +217,10 @@ void CUAPI_Asyn_PoissonGravitySolver( const real h_Rho_Array    [][RHO_NXT][RHO_
             Aux_Error( ERROR_INFO, "Poi_NThread (%d) < (POT_NXT-2)*(POT_NXT-2) (%d) !!\n",
                        Poi_NThread, (POT_NXT-2)*(POT_NXT-2) );
 
-//       constraint due to the reduction operation in "CUPOT_Poisson_10to14cube" and "CUPOT_PoissonSolver_MG"
-#        if (  ( POT_SCHEME == SOR && defined USE_PSOLVER_10TO14 )  ||  POT_SCHEME == MG  )
+//       constraint due to the reduction operation in CUPOT_PoissonSolver_SOR() and CUPOT_PoissonSolver_MG()
+#        if ( POT_SCHEME == SOR  ||  POT_SCHEME == MG )
          if ( Poi_NThread < 64 )
             Aux_Error( ERROR_INFO, "incorrect parameter %s = %d (must >= 64) !!\n", "Poi_NThread", Poi_NThread );
-#        endif
-
-//       constraint in "CUPOT_PoissonSolver_SOR_16to18cube"
-#        if ( POT_SCHEME == SOR  &&  !defined USE_PSOLVER_10TO14 )
-         if ( Poi_NThread != RHO_NXT*RHO_NXT/2 )
-            Aux_Error( ERROR_INFO, "incorrect parameter %s = %d (must == %d) !!\n", "Poi_NThread", Poi_NThread,
-                       RHO_NXT*RHO_NXT/2 );
 #        endif
 
          if ( IntScheme != INT_CQUAD  &&  IntScheme != INT_QUAD )
@@ -408,28 +399,20 @@ void CUAPI_Asyn_PoissonGravitySolver( const real h_Rho_Array    [][RHO_NXT][RHO_
          {
 #           if ( POT_SCHEME == SOR )
 
-#           ifdef USE_PSOLVER_10TO14
-            CUPOT_PoissonSolver_SOR_10to14cube <<< NPatch_per_Stream[s], Poi_Block_Dim, 0, Stream[s] >>>
-                                               ( d_Rho_Array_P     + UsedPatch[s],
-                                                 d_Pot_Array_P_In  + UsedPatch[s],
-                                                 d_Pot_Array_P_Out + UsedPatch[s],
-                                                 SOR_Min_Iter, SOR_Max_Iter, SOR_Omega_6, Poi_Const, IntScheme );
-#           else
-            CUPOT_PoissonSolver_SOR_16to18cube <<< NPatch_per_Stream[s], Poi_Block_Dim, 0, Stream[s] >>>
-                                               ( d_Rho_Array_P     + UsedPatch[s],
-                                                 d_Pot_Array_P_In  + UsedPatch[s],
-                                                 d_Pot_Array_P_Out + UsedPatch[s],
-                                                 SOR_Min_Iter, SOR_Max_Iter, SOR_Omega_6, Poi_Const, IntScheme );
-#           endif // #ifdef USE_PSOLVER_10TO14 ... else ...
+            CUPOT_PoissonSolver_SOR <<< NPatch_per_Stream[s], Poi_Block_Dim, 0, Stream[s] >>>
+                                    ( d_Rho_Array_P     + UsedPatch[s],
+                                      d_Pot_Array_P_In  + UsedPatch[s],
+                                      d_Pot_Array_P_Out + UsedPatch[s],
+                                      SOR_Min_Iter, SOR_Max_Iter, SOR_Omega_6, Poi_Const, IntScheme );
 
 #           elif ( POT_SCHEME == MG  )
 
-            CUPOT_PoissonSolver_MG             <<< NPatch_per_Stream[s], Poi_Block_Dim, 0, Stream[s] >>>
-                                               ( d_Rho_Array_P     + UsedPatch[s],
-                                                 d_Pot_Array_P_In  + UsedPatch[s],
-                                                 d_Pot_Array_P_Out + UsedPatch[s],
-                                                 dh, MG_Max_Iter, MG_NPre_Smooth, MG_NPost_Smooth, MG_Tolerated_Error,
-                                                 Poi_Coeff, IntScheme );
+            CUPOT_PoissonSolver_MG  <<< NPatch_per_Stream[s], Poi_Block_Dim, 0, Stream[s] >>>
+                                    ( d_Rho_Array_P     + UsedPatch[s],
+                                      d_Pot_Array_P_In  + UsedPatch[s],
+                                      d_Pot_Array_P_Out + UsedPatch[s],
+                                      dh, MG_Max_Iter, MG_NPre_Smooth, MG_NPost_Smooth, MG_Tolerated_Error,
+                                      Poi_Coeff, IntScheme );
 
 #           else
 
@@ -467,11 +450,20 @@ void CUAPI_Asyn_PoissonGravitySolver( const real h_Rho_Array    [][RHO_NXT][RHO_
                                     TimeNew, TimeOld, MinEint );
 
 #        elif ( MODEL == ELBDM )
+#        if ( ELBDM_SCHEME == ELBDM_HYBRID )
+         if ( UseWaveFlag )
+#        endif
          CUPOT_ELBDMGravitySolver <<< NPatch_per_Stream[s], Gra_Block_Dim, 0, Stream[s] >>>
                                   ( d_Flu_Array_G      + UsedPatch[s],
                                     d_Pot_Array_P_Out  + UsedPatch[s],
-                                    d_Corner_Array_PGT + UsedPatch[s],
                                     ELBDM_EtaDt, dh, ELBDM_Lambda );
+#        if ( ELBDM_SCHEME == ELBDM_HYBRID )
+         else
+         CUPOT_ELBDMGravitySolver_HamiltonJacobi <<< NPatch_per_Stream[s], Gra_Block_Dim, 0, Stream[s] >>>
+                                  ( d_Flu_Array_G      + UsedPatch[s],
+                                    d_Pot_Array_P_Out  + UsedPatch[s],
+                                    ELBDM_EtaDt, dh, ELBDM_Lambda );
+#        endif
 
 #        else
 #        error : ERROR : unsupported MODEL !!

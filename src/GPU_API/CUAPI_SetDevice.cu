@@ -53,6 +53,7 @@ void CUAPI_SetDevice( const int Mode )
 // set the device ID
    void **d_TempPtr = NULL;
    int SetDeviceID, GetDeviceID = 999;
+   int computeMode;
    cudaDeviceProp DeviceProp;
 
    switch ( Mode )
@@ -77,9 +78,9 @@ void CUAPI_SetDevice( const int Mode )
 
 //       make sure that the "exclusive" compute mode is adopted
          CUDA_CHECK_ERROR(  cudaGetDevice( &GetDeviceID )  );
-         CUDA_CHECK_ERROR(  cudaGetDeviceProperties( &DeviceProp, GetDeviceID )  );
+         CUDA_CHECK_ERROR(  cudaDeviceGetAttribute(&computeMode, cudaDevAttrComputeMode, GetDeviceID)  );
 
-         if ( DeviceProp.computeMode != cudaComputeModeExclusive )
+         if ( computeMode != cudaComputeModeExclusive )
          {
             Aux_Message( stderr, "WARNING : \"exclusive\" compute mode is NOT enabled for \"%s\" at Rank %2d",
                          "OPT__GPUID_SELECT == -2", MPI_Rank );
@@ -153,52 +154,11 @@ void CUAPI_SetDevice( const int Mode )
 #  endif
 
 
-// (5) verify the GPU architecture
-#  if   ( GPU_ARCH == FERMI )
-   if ( DeviceProp.major != 2 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Fermi architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  elif ( GPU_ARCH == KEPLER )
-   if ( DeviceProp.major != 3 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Kepler architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  elif ( GPU_ARCH == MAXWELL )
-   if ( DeviceProp.major != 5 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Maxwell architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  elif ( GPU_ARCH == PASCAL )
-   if ( DeviceProp.major != 6 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Pascal architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  elif ( GPU_ARCH == VOLTA )
-   if ( DeviceProp.major != 7  &&  DeviceProp.minor != 0 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Volta architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  elif ( GPU_ARCH == TURING )
-   if ( DeviceProp.major != 7  &&  DeviceProp.minor != 5 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Turing architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  elif ( GPU_ARCH == AMPERE )
-   if ( DeviceProp.major != 8 )
-      Aux_Error( ERROR_INFO, "GPU \"%s\" with the compute capability %d.%d is incompatible with the Ampere architecture !!\n"
-                             "        --> Please reset GPU_ARCH in the Makefile properly\n",
-                 DeviceProp.name, DeviceProp.major, DeviceProp.minor );
-
-#  else
-#  error : UNKNOWN GPU_ARCH !!
-#  endif // GPU_ARCH
+// (5) verify the GPU compute capability
+   if ( DeviceProp.major * 100 + DeviceProp.minor * 10 != GPU_COMPUTE_CAPABILITY )
+      Aux_Error( ERROR_INFO, "The compute capability %d.%d of the GPU \"%s\" does not match the GPU_COMPUTE_CAPABILITY %d !!\n"
+                             "        --> Please set it properly in your machine config file.\n",
+                 DeviceProp.major, DeviceProp.minor, DeviceProp.name, GPU_COMPUTE_CAPABILITY );
 
 
 // (6) some options are not supported

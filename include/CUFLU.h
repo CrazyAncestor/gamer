@@ -14,6 +14,7 @@
 # include "Typedef.h"
 # include "SrcTerms.h"
 # include "EoS.h"
+# include "Microphysics.h"
 #else
 # include "GAMER.h"
 #endif
@@ -25,12 +26,16 @@
 #endif
 
 
+// include CUDA FFT library if GPU kinetic ELBDM Gram-Fourier extension solver is enabled
+#if ( defined(__CUDACC__) && GRAMFE_SCHEME == GRAMFE_FFT )
+#  include <cufftdx.hpp>
+#endif
+
 // faster integer multiplication in Fermi
 #if ( defined __CUDACC__  &&  __CUDA_ARCH__ >= 200 )
 #  define __umul24( a, b )   ( (a)*(b) )
 #  define  __mul24( a, b )   ( (a)*(b) )
 #endif
-
 
 
 // #################################
@@ -53,7 +58,7 @@
 //                            --> for example, in MHM_RP FC_Flux[] is also linked to Half_Flux[] used by
 //                                Hydro_RiemannPredict_Flux() and Hydro_RiemannPredict()
 //                            --> for the latter two routines, Half_Flux[] is accessed with N_HF_FLUX
-//                                that is smaller than N_FC_FLUX
+//                                that is equal to N_FC_FLUX and larger than N_FL_FLUX
 // N_HF_VAR             : for accessing PriVar_Half[], which is linked to PriVar[] with the size FLU_NXT^3
 //                        --> also for accessing FC_B_Half[] in MHD
 
@@ -76,8 +81,16 @@
 #  if   ( FLU_SCHEME == MHM )
 
 #     define N_FC_VAR            ( PS2 + 2 )
+#    ifdef MHD
+#     define N_HF_VAR            ( N_FC_VAR )
+#     define N_FL_FLUX           ( PS2 + 2 )
+//    MHM doesn't have the half-step flux actually; this is only for calculating the half-step electric field
+#     define N_HF_FLUX           ( N_FL_FLUX+2 )
+#    else
 #     define N_FL_FLUX           ( PS2 + 1 )
-#     define N_FC_FLUX           ( N_FL_FLUX )
+//    MHM doesn't have the half-step flux actually; this is only for defining N_FC_FLUX
+#     define N_HF_FLUX           ( N_FL_FLUX )
+#    endif
 
 #  elif ( FLU_SCHEME == MHM_RP )
 
@@ -90,7 +103,6 @@
 #     define N_FL_FLUX           ( PS2 + 1 )
 #     define N_HF_FLUX           ( FLU_NXT - 1 )
 #    endif
-#     define N_FC_FLUX           ( N_HF_FLUX )
 #     define N_HF_VAR            ( FLU_NXT - 2 )
 
 #  elif ( FLU_SCHEME == CTU )
@@ -104,31 +116,31 @@
 #     define N_FL_FLUX           ( N_FC_VAR )
 #    endif
 #     define N_HF_FLUX           ( N_FC_VAR )
-#     define N_FC_FLUX           ( N_HF_FLUX )
 
 #  endif // FLU_SCHEME
 
 #  define N_SLOPE_PPM            ( N_FC_VAR + 2 )
 
+#   define N_FC_FLUX             ( N_HF_FLUX )
 #  ifdef MHD
-#   define N_HF_ELE              ( N_FC_FLUX - 1 )
+#   define N_HF_ELE              ( N_HF_FLUX - 1 )
 #   define N_FL_ELE              ( N_FL_FLUX - 1 )
 #   define N_EC_ELE              ( N_FC_FLUX - 1 )
 #  else
 #   define N_EC_ELE              0
+#   define N_HF_ELE              0
 #  endif
 
 #endif // #if ( FLU_SCHEME == MHM  ||  FLU_SCHEME == MHM_RP  ||  FLU_SCHEME == CTU )
 
 
-// check non-physical negative values (e.g., negative density) for the fluid solver
+// check non-physical values (e.g., negative density) for the fluid solver
 #if ( defined GAMER_DEBUG  &&  MODEL == HYDRO )
-#  define CHECK_NEGATIVE_IN_FLUID
+#  define CHECK_UNPHYSICAL_IN_FLUID
 #endif
 
-#ifdef CHECK_NEGATIVE_IN_FLUID
+#ifdef CHECK_UNPHYSICAL_IN_FLUID
 #  include "stdio.h"
-   bool Hydro_CheckNegative( const real Input );
 #endif
 
 
@@ -163,7 +175,7 @@
 
 // verify that the density and pressure in the intermediate states of Roe's Riemann solver are positive.
 // --> if either is negative, we switch to other Riemann solvers (EXACT/HLLE/HLLC/HLLD)
-#if (  ( FLU_SCHEME == MHM || FLU_SCHEME == MHM_RP || FLU_SCHEME == CTU )  &&  RSOLVER == ROE  )
+#if (  ( FLU_SCHEME == MHM || FLU_SCHEME == MHM_RP || FLU_SCHEME == CTU )  &&  ( RSOLVER == ROE || RSOLVER_RESCUE == ROE )  )
 #  ifdef MHD
 //#     define CHECK_INTERMEDIATE    HLLD
 #     define CHECK_INTERMEDIATE    HLLE
@@ -174,8 +186,32 @@
 #endif
 
 
-// use Eulerian with Y factor for Roe Solver in MHD
-#if (  defined MHD  &&  ( RSOLVER == ROE || RSOLVER == HLLE )  )
+// switch to a different Riemann solver if the default one fails
+// --> to disable it, either comment out this line or set RSOLVER_RESCUE to OPTION_NONE
+// --> used by Hydro_ComputeFlux() and Hydro_RiemannPredict_Flux()
+// --> doesn't support either RSOLVER==ROE or RSOLVER_RESCUE==ROE/EXACT for now due to HLL_NO_REF_STATE/HLL_INCLUDE_ALL_WAVES
+#  define RSOLVER_RESCUE   HLLE
+
+#if ( RSOLVER_RESCUE == ROE  ||  RSOLVER_RESCUE == EXACT )
+#  error : ERROR : does not support RSOLVER_RESCUE == ROE/EXACT !!
+#endif
+
+#if ( defined MHD  &&  RSOLVER_RESCUE == HLLC )
+#  error : ERROR : RSOLVER_RESCUE == HLLC for MHD simulations !!
+#endif
+
+#if ( !defined MHD  &&  RSOLVER_RESCUE == HLLD )
+#  error : ERROR : RSOLVER_RESCUE == HLLD for non-MHD simulations !!
+#endif
+
+#if ( RSOLVER_RESCUE == RSOLVER  ||  RSOLVER == ROE  ||  !defined RSOLVER )
+#  undef  RSOLVER_RESCUE
+#  define RSOLVER_RESCUE   OPTION_NONE
+#endif
+
+
+// use Eulerian with Y factor for the Roe Solver in MHD
+#ifdef MHD
 #  define EULERY
 #endif
 
@@ -222,10 +258,16 @@
 #  define HLLD_WAVESPEED   HLL_WAVESPEED_DAVIS
 
 
+// check unphysical results in the MHM half-step prediction
+#if ( FLU_SCHEME == MHM )
+#  define MHM_CHECK_PREDICT
+#endif
+
+
+
 // 2. ELBDM macro
 //=========================================================================================
 #elif ( MODEL == ELBDM )
-
 
 #else
 #  error : ERROR : unsupported MODEL !!
@@ -301,6 +343,24 @@
 #     else
 #     define FLU_BLOCK_SIZE_X       512      // not optimized yet
 #     endif
+#  elif ( GPU_ARCH == ADA_LOVELACE )
+#     ifdef FLOAT8
+#     define FLU_BLOCK_SIZE_X       256
+#     else
+#     define FLU_BLOCK_SIZE_X       512      // not optimized yet
+#     endif
+#  elif ( GPU_ARCH == HOPPER )
+#     ifdef FLOAT8
+#     define FLU_BLOCK_SIZE_X       256
+#     else
+#     define FLU_BLOCK_SIZE_X       512      // not optimized yet
+#     endif
+#  elif ( GPU_ARCH == BLACKWELL )
+#     ifdef FLOAT8
+#     define FLU_BLOCK_SIZE_X       256
+#     else
+#     define FLU_BLOCK_SIZE_X       512      // not optimized yet
+#     endif
 #  else
 #     define FLU_BLOCK_SIZE_X       NULL_INT
 #     ifdef GPU
@@ -349,6 +409,24 @@
 #     define FLU_BLOCK_SIZE_X       512      // not optimized yet
 #     endif
 #  elif ( GPU_ARCH == AMPERE )
+#     ifdef FLOAT8
+#     define FLU_BLOCK_SIZE_X       256
+#     else
+#     define FLU_BLOCK_SIZE_X       512      // not optimized yet
+#     endif
+#  elif ( GPU_ARCH == ADA_LOVELACE )
+#     ifdef FLOAT8
+#     define FLU_BLOCK_SIZE_X       256
+#     else
+#     define FLU_BLOCK_SIZE_X       512      // not optimized yet
+#     endif
+#  elif ( GPU_ARCH == HOPPER )
+#     ifdef FLOAT8
+#     define FLU_BLOCK_SIZE_X       256
+#     else
+#     define FLU_BLOCK_SIZE_X       512      // not optimized yet
+#     endif
+#  elif ( GPU_ARCH == BLACKWELL )
 #     ifdef FLOAT8
 #     define FLU_BLOCK_SIZE_X       256
 #     else
@@ -422,6 +500,27 @@
 #        define FLU_BLOCK_SIZE_Y    32    // not optimized yet
 #     endif
 
+#  elif ( GPU_ARCH == ADA_LOVELACE )
+#     ifdef FLOAT8
+#        define FLU_BLOCK_SIZE_Y    16    // not optimized yet
+#     else
+#        define FLU_BLOCK_SIZE_Y    32    // not optimized yet
+#     endif
+
+#  elif ( GPU_ARCH == HOPPER )
+#     ifdef FLOAT8
+#        define FLU_BLOCK_SIZE_Y    16    // not optimized yet
+#     else
+#        define FLU_BLOCK_SIZE_Y    32    // not optimized yet
+#     endif
+
+#  elif ( GPU_ARCH == BLACKWELL )
+#     ifdef FLOAT8
+#        define FLU_BLOCK_SIZE_Y    16    // not optimized yet
+#     else
+#        define FLU_BLOCK_SIZE_Y    32    // not optimized yet
+#     endif
+
 #  else
 #        define FLU_BLOCK_SIZE_Y    NULL_INT
 #        ifdef GPU
@@ -429,6 +528,71 @@
 #        endif
 #  endif
 
+
+// to get rid of the "uses too much shared data" error message in the ELBDM HJ solver
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+#     if ( PATCH_SIZE == 8  &&  NCOMP_PASSIVE == 0 )
+#        define FLU_HJ_BLOCK_SIZE_Y    ( FLU_BLOCK_SIZE_Y   )  // not optimized yet
+#     else
+#        define FLU_HJ_BLOCK_SIZE_Y    ( FLU_BLOCK_SIZE_Y/2 )  // not optimized yet
+#     endif
+#  endif // #if ( ELBDM_SCHEME == ELBDM_HYBRID )
+
+
+// set number of threads and blocks used in GRAMFE_FFT GPU scheme
+#  if ( defined(__CUDACC__)  &&  WAVE_SCHEME == WAVE_GRAMFE  &&  GRAMFE_SCHEME == GRAMFE_FFT )
+
+// cuFFTdx supports the following GPU architectures at the time of writing (23.05.23)
+//
+//    Volta: 700 and 720 (sm_70, sm_72),
+//
+//    Turing: 750 (sm_75).
+//
+//    Ampere: 800, 860 and 870 (sm_80, sm_86, sm_87).
+//
+//    Ada: 890 (sm_89).
+//
+//    Hopper: 900 (sm_90).
+//
+//    Blackwell: 1000, 1010 (Thor GPUs with CUDA12.X or below), 1030, 1100 (Thor GPUs with CUDA13.X or above), 1200 and 1210 (sm_100, sm 101, sm_103, sm_110, sm_1200 and sm_121)
+#  if   ( GPU_COMPUTE_CAPABILITY != 700  && GPU_COMPUTE_CAPABILITY != 720  && GPU_COMPUTE_CAPABILITY != 750  \
+      &&  GPU_COMPUTE_CAPABILITY != 800  && GPU_COMPUTE_CAPABILITY != 860  && GPU_COMPUTE_CAPABILITY != 870  \
+      &&  GPU_COMPUTE_CAPABILITY != 890 \
+      &&  GPU_COMPUTE_CAPABILITY != 900 \
+      &&  GPU_COMPUTE_CAPABILITY != 1000 && GPU_COMPUTE_CAPABILITY != 1030 \
+      &&  ( ( __CUDACC_VER_MAJOR__ < 13 && GPU_COMPUTE_CAPABILITY != 1010 ) || ( __CUDACC_VER_MAJOR__ >= 13 && GPU_COMPUTE_CAPABILITY != 1100 ) ) \
+      &&  GPU_COMPUTE_CAPABILITY != 1200 && GPU_COMPUTE_CAPABILITY != 1210 )
+#     error : ERROR : GPU_COMPUTE_CAPABILITY unsupported by cuFFTdx (please visit cuFFTdx website to check whether your GPU is supported and update CUFLU.h accordingly if it is) !!
+#  endif
+
+
+// number of blocks suggested by cufftdx disabled by default
+// profiling the code showed that a different number of blocks provides better performance
+// this is because the code does not only compute the FFT, but also the Fourier extension
+#  define GRAMFE_USE_SUGGESTED_BLOCKS        0
+#  define GRAMFE_CUSTOM_ELEMENTS_PER_THREAD  4
+#  define GRAMFE_CUSTOM_FFTS_PER_BLOCK       12
+
+
+using CUFFTDX_ARCH = decltype(cufftdx::SM<GPU_COMPUTE_CAPABILITY>());
+
+using fft_base     = decltype(cufftdx::Block() + cufftdx::Size<GRAMFE_FLU_NXT>() + cufftdx::Type<cufftdx::fft_type::c2c>() + cufftdx::Precision<gramfe_fft_float>() + CUFFTDX_ARCH() );
+using forward_fft  = decltype(fft_base() + cufftdx::Direction<cufftdx::fft_direction::forward>());
+using inverse_fft  = decltype(fft_base() + cufftdx::Direction<cufftdx::fft_direction::inverse>());
+
+// complete FFT description
+static constexpr unsigned int elements_per_thread = GRAMFE_USE_SUGGESTED_BLOCKS ? forward_fft::elements_per_thread      : GRAMFE_CUSTOM_ELEMENTS_PER_THREAD;
+static constexpr unsigned int ffts_per_block      = GRAMFE_USE_SUGGESTED_BLOCKS ? inverse_fft::suggested_ffts_per_block : GRAMFE_CUSTOM_FFTS_PER_BLOCK;
+
+using FFT          = decltype( forward_fft() + cufftdx::ElementsPerThread<elements_per_thread>() + cufftdx::FFTsPerBlock<ffts_per_block>());
+using IFFT         = decltype( inverse_fft() + cufftdx::ElementsPerThread<elements_per_thread>() + cufftdx::FFTsPerBlock<ffts_per_block>());
+
+using complex_type = typename FFT::value_type;
+
+#  endif // # if ( defined(__CUDACC__)  &&  WAVE_SCHEME == WAVE_GRAMFE  &&  GRAMFE_SCHEME == GRAMFE_FFT )
+
+#else
+#  error : ERROR : Unsupported model in CUFLU.h
 #endif // MODEL
 
 
@@ -437,8 +601,9 @@
 #     define DT_FLU_BLOCK_SIZE      512
 
 // use shuffle reduction in the KEPLER and later GPUs
-#  if ( GPU_ARCH == KEPLER  ||  GPU_ARCH == MAXWELL  ||  GPU_ARCH == PASCAL  ||  GPU_ARCH == VOLTA  ||  \
-        GPU_ARCH == TURING  ||  GPU_ARCH == AMPERE )
+#  if ( GPU_ARCH == KEPLER  ||  GPU_ARCH == MAXWELL  ||  GPU_ARCH == PASCAL        ||  GPU_ARCH == VOLTA  ||  \
+        GPU_ARCH == TURING  ||  GPU_ARCH == AMPERE   ||  GPU_ARCH == ADA_LOVELACE  ||  GPU_ARCH == HOPPER ||  \
+        GPU_ARCH == BLACKWELL )
 #     define DT_FLU_USE_SHUFFLE
 #  endif
 
@@ -453,8 +618,8 @@
 // --> please refer to https://en.wikipedia.org/wiki/CUDA#Version_features_and_specifications
 //     for information on warp size
 #ifdef __CUDACC__
-#if ( GPU_ARCH == FERMI  ||  GPU_ARCH == KEPLER  ||  GPU_ARCH == MAXWELL  ||  GPU_ARCH == PASCAL  ||  GPU_ARCH == VOLTA  ||  \
-      GPU_ARCH == TURING  ||  GPU_ARCH == AMPERE  )
+#if ( GPU_ARCH == FERMI   ||  GPU_ARCH == KEPLER  ||  GPU_ARCH == MAXWELL       ||  GPU_ARCH == PASCAL  ||  GPU_ARCH == VOLTA  ||  \
+      GPU_ARCH == TURING  ||  GPU_ARCH == AMPERE  ||  GPU_ARCH == ADA_LOVELACE  ||  GPU_ARCH == HOPPER  ||  GPU_ARCH == BLACKWELL )
 // CUPOT.h will define WARP_SIZE as well
 #  ifndef WARP_SIZE
 #  define WARP_SIZE 32
@@ -474,9 +639,11 @@
 #ifdef __CUDACC__
 # define GPU_DEVICE          __forceinline__ __device__
 # define GPU_DEVICE_NOINLINE    __noinline__ __device__
+# define GPU_DEVICE_VARIABLE                 __device__
 #else
 # define GPU_DEVICE
 # define GPU_DEVICE_NOINLINE
+# define GPU_DEVICE_VARIABLE
 #endif
 
 // unified CPU/GPU loop
@@ -485,6 +652,7 @@
 #else
 # define CGPU_LOOP( var, niter )    for (int (var)=0;           (var)<(niter); (var)++          )
 #endif
+
 
 
 

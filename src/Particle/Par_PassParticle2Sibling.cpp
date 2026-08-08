@@ -43,9 +43,10 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
    const double dh_min           = amr->dh[TOP_LEVEL];
    const double BoxEdge[3]       = { (NX0_TOT[0]*(1<<TOP_LEVEL))*dh_min,
                                      (NX0_TOT[1]*(1<<TOP_LEVEL))*dh_min,
-                                     (NX0_TOT[2]*(1<<TOP_LEVEL))*dh_min }; // prevent from the round-off error problem
-// ParPos should NOT be used after calling Par_LB_ExchangeParticleBetweenPatch() since amr->Par->Attribute may be reallocated
-   real *ParPos[3]               = { amr->Par->PosX, amr->Par->PosY, amr->Par->PosZ };
+                                     (NX0_TOT[2]*(1<<TOP_LEVEL))*dh_min }; // prevent the round-off error problem
+// ParPos should NOT be used after calling Par_LB_ExchangeParticleBetweenPatch() since amr->Par->AttributeFlt may be reallocated
+   real_par *ParPos[3]           = { amr->Par->PosX, amr->Par->PosY, amr->Par->PosZ };
+   const long_par *PType = amr->Par->Type;
 
    int     NPar_Remove_Tot=0;
    int     NPar, NGuess, NPar_Remove, ArraySize[26], ijk[3], Side, TSib, SibPID, FaPID, FaSib, FaSibPID;
@@ -113,7 +114,7 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
                {
                   ParPos[d][ParID] = ParPos[d][ParID] + BoxEdge[d];
 
-//                prevent from the round-off error problem
+//                prevent the round-off error problem
                   if ( ParPos[d][ParID] == BoxEdge[d] )
                   {
                      ijk[d]           = 1;
@@ -154,7 +155,7 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
             NPar_Remove_Tot ++;
 
 //          use OpenMP critical construct since RemoveOneParticle will modify NPar_Active/Inactive, which are global variables
-//          --> note that the order of which thread calls RemoveOneParticle() is nondeterministic and may change from run to run
+//          --> note that the order of which thread calls RemoveOneParticle() is non-deterministic and may change from run to run
 //              --> order of particles stored in the particle repository (i.e., their particle ID) may change from run to run
 //              --> particle text file may change from run to run since it's dumped according to the order of particle ID
 //          --> but it's not an issue since the actual data of each particle will not be affected
@@ -204,7 +205,12 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
 #              else
                const int MagSg = NULL_INT;
 #              endif
-               Output_Patch( lv, PID, amr->FluSg[lv], amr->PotSg[lv], MagSg, "debug" );
+#              ifdef GRAVITY
+               const int PotSg = amr->PotSg[lv];
+#              else
+               const int PotSg = NULL_INT;
+#              endif
+               Output_Patch( lv, PID, amr->FluSg[lv], PotSg, MagSg, "debug" );
                MPI_Exit();
             }
 #           endif
@@ -213,7 +219,9 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
 
 
 //    3. remove the escaping particles (set amr->Par->NPar_Lv later due to OpenMP)
-      amr->patch[0][lv][PID]->RemoveParticle( NPar_Remove, RemoveParList, NULL, RemoveAllPar_No );
+      const long_par *PType = amr->Par->Type;
+      amr->patch[0][lv][PID]->RemoveParticle( NPar_Remove, RemoveParList, NULL,
+                                              RemoveAllPar_No, PType );
       delete [] RemoveParList;
 
    } // for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++)
@@ -238,7 +246,7 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
 //          SibPID can be negative for non-periodic BC.
             if ( SibPID >= 0  &&  amr->patch[0][lv][SibPID]->NPar_Escp[ MirSib[s] ] > 0 )
             {
-//###NOTE : No OpenMP since AddParticle will modify amr->Par->NPar_Lv[]
+//###NOTE: No OpenMP since AddParticle will modify amr->Par->NPar_Lv[]
 #              ifdef DEBUG_PARTICLE
                if ( SibPID >= amr->NPatchComma[lv][1] )
                   Aux_Error( ERROR_INFO, "buffer patch cannot have escaping particles (PID %d, s %d, SibPID %d, NPar_Escp %d) !!\n",
@@ -248,12 +256,12 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
                sprintf( Comment, "%s C->C", __FUNCTION__ );
                amr->patch[0][lv][PID]->AddParticle( amr->patch[0][lv][SibPID]->NPar_Escp   [ MirSib[s] ],
                                                     amr->patch[0][lv][SibPID]->ParList_Escp[ MirSib[s] ],
-                                                   &amr->Par->NPar_Lv[lv],
-                                                    (const real **)ParPos, amr->Par->NPar_AcPlusInac, Comment );
+                                                   &amr->Par->NPar_Lv[lv], PType,
+                                                    (const real_par **)ParPos, amr->Par->NPar_AcPlusInac, Comment );
 #              else
                amr->patch[0][lv][PID]->AddParticle( amr->patch[0][lv][SibPID]->NPar_Escp   [ MirSib[s] ],
                                                     amr->patch[0][lv][SibPID]->ParList_Escp[ MirSib[s] ],
-                                                   &amr->Par->NPar_Lv[lv] );
+                                                   &amr->Par->NPar_Lv[lv], PType );
 #              endif
             }
          } // for (int s=0; s<26; s++)
@@ -266,7 +274,7 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
       } // for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++)
 
 
-//###NOTE : NO OpenMP since particles from different patches can enter the same father-sibling patch
+//###NOTE: NO OpenMP since particles from different patches can enter the same father-sibling patch
 //    6. pass particles to the father-sibling patches (fine --> coarse)
       if ( lv > 0 )
       for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++)
@@ -307,18 +315,18 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
 
 
 //          add particles to the target father->sibling patch (which can be real of buffer patches)
-//###NOTE : No OpenMP since AddParticle will modify amr->Par->NPar_Lv[]
+//###NOTE: No OpenMP since AddParticle will modify amr->Par->NPar_Lv[]
 #           ifdef DEBUG_PARTICLE
             char Comment[100];
             sprintf( Comment, "%s F->C", __FUNCTION__ );
             amr->patch[0][FaLv][FaSibPID]->AddParticle( amr->patch[0][lv][PID]->NPar_Escp   [s],
                                                         amr->patch[0][lv][PID]->ParList_Escp[s],
-                                                       &amr->Par->NPar_Lv[FaLv],
-                                                        (const real **)ParPos, amr->Par->NPar_AcPlusInac, Comment );
+                                                       &amr->Par->NPar_Lv[FaLv], PType,
+                                                        (const real_par **)ParPos, amr->Par->NPar_AcPlusInac, Comment );
 #           else
             amr->patch[0][FaLv][FaSibPID]->AddParticle( amr->patch[0][lv][PID]->NPar_Escp   [s],
                                                         amr->patch[0][lv][PID]->ParList_Escp[s],
-                                                       &amr->Par->NPar_Lv[FaLv] );
+                                                       &amr->Par->NPar_Lv[FaLv], PType );
 #           endif
          }
       } // for (int PID=0; PID<amr->NPatchComma[lv][1]; PID++); for (int s=0; s<26; s++)
@@ -407,7 +415,7 @@ void Par_PassParticle2Sibling( const int lv, const bool TimingSendPar )
 //
 // Return      :  true/false : inside/outside the active region
 //-------------------------------------------------------------------------------------------------------
-bool Par_WithinActiveRegion( const real x, const real y, const real z )
+bool Par_WithinActiveRegion( const real_par x, const real_par y, const real_par z )
 {
 
 // RemoveCell has the unit of root-level cell
@@ -420,7 +428,7 @@ bool Par_WithinActiveRegion( const real x, const real y, const real z )
 
    return true;
 
-} // FUCNTION Par_WithinActiveRegion
+} // FUNCTION Par_WithinActiveRegion
 
 
 

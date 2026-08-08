@@ -20,8 +20,9 @@
 void Aux_Record_Performance( const double ElapsedTime )
 {
 
-   const char FileName[] = "Record__Performance";
    static bool FirstTime = true;
+   char FileName[2*MAX_STRING];
+   sprintf( FileName, "%s/Record__Performance", OUTPUT_DIR );
 
 
 // get the total number of active particles in each rank
@@ -85,7 +86,7 @@ void Aux_Record_Performance( const double ElapsedTime )
 #     ifdef GPU
       const double NUpdateCell_PerSec_PerRank = NUpdateCell_PerSec/MPI_NRank;
 #     else
-      const double NUpdateCell_PerSec_PerRank = NUpdateCell_PerSec/MPI_NRank/OMP_NTHREAD;
+      const double NUpdateCell_PerSec_PerRank = NUpdateCell_PerSec/MPI_NRank;
 #     endif
 
 #     ifdef PARTICLE
@@ -93,7 +94,7 @@ void Aux_Record_Performance( const double ElapsedTime )
 #     ifdef GPU
       const double NUpdatePar_PerSec_PerRank  = NUpdatePar_PerSec/MPI_NRank;
 #     else
-      const double NUpdatePar_PerSec_PerRank  = NUpdatePar_PerSec/MPI_NRank/OMP_NTHREAD;
+      const double NUpdatePar_PerSec_PerRank  = NUpdatePar_PerSec/MPI_NRank;
 #     endif
 #     endif
 

@@ -1,5 +1,4 @@
 #include "GAMER.h"
-#include "TestProb.h"
 
 
 
@@ -32,9 +31,13 @@ static double  *Jet_MaxDis        = NULL;          // maximum distance between t
 static double *Jet_HSE_BgTable_Data = NULL;        // for Jet_HSE: background gas table [radius/density/temperature]
 static int     Jet_HSE_BgTable_NBin;               // for Jet_HSE: number of bins in Jet_HSE_BgTable_Data[]
 // =======================================================================================
+
 #ifdef GRAVITY
 void Init_ExtAcc_Jet();
 #endif
+static void IsolatedBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+                        const int GhostSize, const int idx[], const double pos[], const double Time,
+                        const int lv, const int TFluVarIdxList[], double AuxArray[] );
 
 
 
@@ -83,6 +86,90 @@ void Validate()
 
 #if ( MODEL == HYDRO )
 //-------------------------------------------------------------------------------------------------------
+// Function    :  LoadInputTestProb
+// Description :  Read problem-specific runtime parameters from Input__TestProb and store them in HDF5 snapshots (Data_*)
+//
+// Note        :  1. Invoked by SetParameter() to read parameters
+//                2. Invoked by Output_DumpData_Total_HDF5() using the function pointer Output_HDF5_InputTest_Ptr to store parameters
+//                3. If there is no problem-specific runtime parameter to load, add at least one parameter
+//                   to prevent an empty structure in HDF5_Output_t
+//                   --> Example:
+//                       LOAD_PARA( load_mode, "TestProb_ID", &TESTPROB_ID, TESTPROB_ID, TESTPROB_ID, TESTPROB_ID );
+//
+// Parameter   :  load_mode      : Mode for loading parameters
+//                                 --> LOAD_READPARA    : Read parameters from Input__TestProb
+//                                     LOAD_HDF5_OUTPUT : Store parameters in HDF5 snapshots
+//                ReadPara       : Data structure for reading parameters (used with LOAD_READPARA)
+//                HDF5_InputTest : Data structure for storing parameters in HDF5 snapshots (used with LOAD_HDF5_OUTPUT)
+//
+// Return      :  None
+//-------------------------------------------------------------------------------------------------------
+void LoadInputTestProb( const LoadParaMode_t load_mode, ReadPara_t *ReadPara, HDF5_Output_t *HDF5_InputTest )
+{
+
+#  ifndef SUPPORT_HDF5
+   if ( load_mode == LOAD_HDF5_OUTPUT )   Aux_Error( ERROR_INFO, "please turn on SUPPORT_HDF5 in the Makefile for load_mode == LOAD_HDF5_OUTPUT !!\n" );
+#  endif
+
+   if ( load_mode == LOAD_READPARA     &&  ReadPara       == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_READPARA and ReadPara == NULL !!\n" );
+   if ( load_mode == LOAD_HDF5_OUTPUT  &&  HDF5_InputTest == NULL )   Aux_Error( ERROR_INFO, "load_mode == LOAD_HDF5_OUTPUT and HDF5_InputTest == NULL !!\n" );
+
+// add parameters in the following format:
+// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
+// --> some handy constants (e.g., NoMin_int, Eps_float, ...) are defined in "include/ReadPara.h"
+// --> LOAD_PARA() is defined in "include/TestProb.h"
+// **************************************************************************************************************************
+// LOAD_PARA( load_mode, "KEY_IN_THE_FILE",     &VARIABLE,              DEFAULT,       MIN,              MAX               );
+// **************************************************************************************************************************
+   LOAD_PARA( load_mode, "Jet_NJet",            &Jet_NJet,             -1,             1,                2                 );
+
+// load the input parameters independent of the number of jets
+   LOAD_PARA( load_mode, "Jet_BgDens",          &Jet_BgDens,           -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_BgTemp",          &Jet_BgTemp,           -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_BgVel_x",         &Jet_BgVel[0],          0.0,           NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_BgVel_y",         &Jet_BgVel[1],          0.0,           NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_BgVel_z",         &Jet_BgVel[2],          0.0,           NoMin_double,     NoMax_double      );
+
+// load the input parameters of the hydrostatic equilibrium setup
+   LOAD_PARA( load_mode, "Jet_HSE",             &Jet_HSE,               false,         Useless_bool,     Useless_bool      );
+   LOAD_PARA( load_mode, "Jet_HSE_D",           &Jet_HSE_D,             NoDef_double,  Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_HSE_M200",        &Jet_HSE_M200,          NoDef_double,  Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_HSE_R200",        &Jet_HSE_R200,          NoDef_double,  Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_HSE_C200",        &Jet_HSE_C200,          NoDef_double,  Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet_HSE_BgTable_File", Jet_HSE_BgTable_File,  NoDef_str,     Useless_str,      Useless_str       );
+
+// load the input parameters of each jet
+   LOAD_PARA( load_mode, "Jet0_Radius",         &Jet_Radius    [0],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_HalfHeight",     &Jet_HalfHeight[0],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_SrcVel",         &Jet_SrcVel    [0],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_SrcDens",        &Jet_SrcDens   [0],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_SrcTemp",        &Jet_SrcTemp   [0],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_Vec_x",          &Jet_Vec       [0][0],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_Vec_y",          &Jet_Vec       [0][1],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_Vec_z",          &Jet_Vec       [0][2],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_CenOffset_x",    &Jet_CenOffset [0][0],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_CenOffset_y",    &Jet_CenOffset [0][1],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet0_CenOffset_z",    &Jet_CenOffset [0][2],  NoDef_double,  NoMin_double,     NoMax_double      );
+
+   if ( Jet_NJet == 2 ) {
+   LOAD_PARA( load_mode, "Jet1_Radius",         &Jet_Radius    [1],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_HalfHeight",     &Jet_HalfHeight[1],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_SrcVel",         &Jet_SrcVel    [1],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_SrcDens",        &Jet_SrcDens   [1],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_SrcTemp",        &Jet_SrcTemp   [1],    -1.0,           Eps_double,       NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_Vec_x",          &Jet_Vec       [1][0],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_Vec_y",          &Jet_Vec       [1][1],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_Vec_z",          &Jet_Vec       [1][2],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_CenOffset_x",    &Jet_CenOffset [1][0],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_CenOffset_y",    &Jet_CenOffset [1][1],  NoDef_double,  NoMin_double,     NoMax_double      );
+   LOAD_PARA( load_mode, "Jet1_CenOffset_z",    &Jet_CenOffset [1][2],  NoDef_double,  NoMin_double,     NoMax_double      );
+   }
+
+} // FUNCTION : LoadInputTestProb
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    :  SetParameter
 // Description :  Load and set the problem-specific runtime parameters
 //
@@ -104,20 +191,17 @@ void SetParameter()
 
 
 // (1) load the problem-specific runtime parameters
+// (1-1) read parameters from Input__TestProb
    const char FileName[] = "Input__TestProb";
    ReadPara_t *ReadPara  = new ReadPara_t;
 
-// (1-1) add parameters in the following format:
-// --> note that VARIABLE, DEFAULT, MIN, and MAX must have the same data type
-// --> some handy constants (e.g., Useless_bool, Eps_double, NoMin_int, ...) are defined in "include/ReadPara.h"
-// ********************************************************************************************************************************
-// ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
-// ********************************************************************************************************************************
 // load the number of jets first
-   ReadPara->Add( "Jet_NJet",          &Jet_NJet,             -1,             1,                2                 );
+   ReadPara->Add( "Jet_NJet", &Jet_NJet, -1, 1, 2 );
    ReadPara->Read( FileName );
    delete ReadPara;
-   ReadPara = new ReadPara_t; // for loading the remaining parameters
+
+// for loading the remaining parameters
+   ReadPara = new ReadPara_t;
 
 // allocate memory for the variables whose size depends on the number of jets
    Jet_Radius     = new double [Jet_NJet];
@@ -132,47 +216,7 @@ void SetParameter()
    Jet_WaveK      = new double [Jet_NJet];
    Jet_MaxDis     = new double [Jet_NJet];
 
-// load the input parameters independent of the number of jets
-   ReadPara->Add( "Jet_BgDens",          &Jet_BgDens,           -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet_BgTemp",          &Jet_BgTemp,           -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet_BgVel_x",         &Jet_BgVel[0],          0.0,           NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet_BgVel_y",         &Jet_BgVel[1],          0.0,           NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet_BgVel_z",         &Jet_BgVel[2],          0.0,           NoMin_double,     NoMax_double      );
-
-// load the input parameters of the hydrostatic equilibrium setup
-   ReadPara->Add( "Jet_HSE",             &Jet_HSE,               false,         Useless_bool,     Useless_bool      );
-   ReadPara->Add( "Jet_HSE_D",           &Jet_HSE_D,             NoDef_double,  Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet_HSE_M200",        &Jet_HSE_M200,          NoDef_double,  Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet_HSE_R200",        &Jet_HSE_R200,          NoDef_double,  Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet_HSE_C200",        &Jet_HSE_C200,          NoDef_double,  Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet_HSE_BgTable_File", Jet_HSE_BgTable_File,  Useless_str,   Useless_str,      Useless_str       );
-
-// load the input parameters of each jet
-   ReadPara->Add( "Jet0_Radius",         &Jet_Radius    [0],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet0_HalfHeight",     &Jet_HalfHeight[0],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet0_SrcVel",         &Jet_SrcVel    [0],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet0_SrcDens",        &Jet_SrcDens   [0],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet0_SrcTemp",        &Jet_SrcTemp   [0],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet0_Vec_x",          &Jet_Vec       [0][0],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet0_Vec_y",          &Jet_Vec       [0][1],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet0_Vec_z",          &Jet_Vec       [0][2],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet0_CenOffset_x",    &Jet_CenOffset [0][0],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet0_CenOffset_y",    &Jet_CenOffset [0][1],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet0_CenOffset_z",    &Jet_CenOffset [0][2],  NoDef_double,  NoMin_double,     NoMax_double      );
-
-   if ( Jet_NJet == 2 ) {
-   ReadPara->Add( "Jet1_Radius",         &Jet_Radius    [1],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet1_HalfHeight",     &Jet_HalfHeight[1],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet1_SrcVel",         &Jet_SrcVel    [1],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet1_SrcDens",        &Jet_SrcDens   [1],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet1_SrcTemp",        &Jet_SrcTemp   [1],    -1.0,           Eps_double,       NoMax_double      );
-   ReadPara->Add( "Jet1_Vec_x",          &Jet_Vec       [1][0],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet1_Vec_y",          &Jet_Vec       [1][1],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet1_Vec_z",          &Jet_Vec       [1][2],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet1_CenOffset_x",    &Jet_CenOffset [1][0],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet1_CenOffset_y",    &Jet_CenOffset [1][1],  NoDef_double,  NoMin_double,     NoMax_double      );
-   ReadPara->Add( "Jet1_CenOffset_z",    &Jet_CenOffset [1][2],  NoDef_double,  NoMin_double,     NoMax_double      );
-   }
+   LoadInputTestProb( LOAD_READPARA, ReadPara, NULL );
 
    ReadPara->Read( FileName );
 
@@ -292,18 +336,18 @@ void SetParameter()
 
 
 // (3) reset other general-purpose parameters
-//     --> a helper macro PRINT_WARNING is defined in TestProb.h
+//     --> a helper macro PRINT_RESET_PARA is defined in Macro.h
    const long   End_Step_Default = __INT_MAX__;
    const double End_T_Default    = 50.0*Const_Myr/UNIT_T;
 
    if ( END_STEP < 0 ) {
       END_STEP = End_Step_Default;
-      PRINT_WARNING( "END_STEP", END_STEP, FORMAT_LONG );
+      PRINT_RESET_PARA( END_STEP, FORMAT_LONG, "" );
    }
 
    if ( END_T < 0.0 ) {
       END_T = End_T_Default;
-      PRINT_WARNING( "END_T", END_T, FORMAT_REAL );
+      PRINT_RESET_PARA( END_T, FORMAT_REAL, "" );
    }
 
 
@@ -432,6 +476,38 @@ void End_Jet()
 
 
 //-------------------------------------------------------------------------------------------------------
+// Function    :  IsolatedBC
+// Description :  Isolated boundary condition for galaxies, only allow outflow velocities
+//
+// Note        :  1. Linked to the function pointer "BC_User_Ptr"
+//
+// Parameter   :  Array          : Array to store the prepared data including ghost zones
+//                ArraySize      : Size of Array including the ghost zones on each side
+//                fluid          : Fluid fields to be set
+//                NVar_Flu       : Number of fluid variables to be prepared
+//                GhostSize      : Number of ghost zones
+//                idx            : Array indices
+//                pos            : Physical coordinates
+//                Time           : Physical time
+//                lv             : Refinement level
+//                TFluVarIdxList : List recording the target fluid variable indices ( = [0 ... NCOMP_TOTAL-1] )
+//                AuxArray       : Auxiliary array
+//
+// Return      :  fluid
+//-------------------------------------------------------------------------------------------------------
+void IsolatedBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+                 const int GhostSize, const int idx[], const double pos[], const double Time,
+                 const int lv, const int TFluVarIdxList[], double AuxArray[] )
+{
+
+// simply call the IC function
+   SetGridIC( fluid, pos[0], pos[1], pos[2], Time, lv, AuxArray );
+
+} // FUNCTION : IsolatedBC
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    :  Flu_ResetByUser_Jet
 // Description :  Function to reset the fluid field
 //
@@ -447,6 +523,7 @@ void End_Jet()
 //
 // Parameter   :  fluid    : Fluid array storing both the input (origial) and reset values
 //                           --> Including both active and passive variables
+//                Emag     : Magnetic energy (MHD only)
 //                x/y/z    : Target physical coordinates
 //                Time     : Target physical time
 //                dt       : Time interval to advance solution
@@ -456,8 +533,8 @@ void End_Jet()
 // Return      :  true  : This cell has been reset
 //                false : This cell has not been reset
 //-------------------------------------------------------------------------------------------------------
-bool Flu_ResetByUser_Jet( real fluid[], const double x, const double y, const double z, const double Time,
-                          const double dt, const int lv, double AuxArray[] )
+int Flu_ResetByUser_Jet( real fluid[], const double Emag, const double x, const double y, const double z, const double Time,
+                         const double dt, const int lv, double AuxArray[] )
 {
 
    const double r[3] = { x, y, z };
@@ -468,7 +545,7 @@ bool Flu_ResetByUser_Jet( real fluid[], const double x, const double y, const do
    real   MomSin;
 
 
-// loop over all cells to add the jet source
+// loop over all jet sources
    for (int n=0; n<Jet_NJet; n++)
    {
 //    distance: jet center to mesh
@@ -558,17 +635,20 @@ void Init_TestProb_Hydro_Jet()
    SetParameter();
 
 
-   Init_Function_User_Ptr   = SetGridIC;
-   Flag_User_Ptr            = NULL;
-   Mis_GetTimeStep_User_Ptr = NULL;
-   BC_User_Ptr              = SetGridIC;
-   Flu_ResetByUser_Func_Ptr = Flu_ResetByUser_Jet;
-   Output_User_Ptr          = NULL;
-   Aux_Record_User_Ptr      = NULL;
-   End_User_Ptr             = End_Jet;
+   Init_Function_User_Ptr    = SetGridIC;
+   Flag_User_Ptr             = NULL;
+   Mis_GetTimeStep_User_Ptr  = NULL;
+   BC_User_Ptr               = IsolatedBC;
+   Flu_ResetByUser_Func_Ptr  = Flu_ResetByUser_Jet;
+   Output_User_Ptr           = NULL;
+   Aux_Record_User_Ptr       = NULL;
+   End_User_Ptr              = End_Jet;
 #  ifdef GRAVITY
    if ( OPT__EXT_ACC == EXT_ACC_FUNC )
-   Init_ExtAcc_Ptr         = Init_ExtAcc_Jet;
+   Init_ExtAcc_Ptr           = Init_ExtAcc_Jet;
+#  endif
+#  ifdef SUPPORT_HDF5
+   Output_HDF5_InputTest_Ptr = LoadInputTestProb;
 #  endif
 #  endif // #if ( MODEL == HYDRO )
 

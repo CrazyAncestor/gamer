@@ -4,7 +4,14 @@ static bool Check_Gradient( const int i, const int j, const int k, const real In
 static bool Check_Curl( const int i, const int j, const int k,
                         const real vx[][PS1][PS1], const real vy[][PS1][PS1], const real vz[][PS1][PS1],
                         const double Threshold );
-extern bool (*Flag_User_Ptr)( const int i, const int j, const int k, const int lv, const int PID, const double *Threshold );
+       bool Check_Angular_Max( const int i, const int j, const int k, const int lv, const int PID,
+                               const double CenX, const double CenY, const double CenZ,
+                               const double AngRes_Max, const double AngRes_Max_R );
+static bool Check_Angular_Min( const int i, const int j, const int k, const int lv, const int PID,
+                               const double CenX, const double CenY, const double CenZ,
+                               const double AngRes_Min );
+static bool Check_Radial( const int i, const int j, const int k, const int lv, const int PID,
+                          const double CenX, const double CenY, const double CenZ, const double Refine_Rad );
 
 
 
@@ -17,43 +24,74 @@ extern bool (*Flag_User_Ptr)( const int i, const int j, const int k, const int l
 //                2. For OPT__FLAG_USER, the function pointer "Flag_User_Ptr" must be set by a
 //                   test problem initializer
 //
-// Parameter   :  lv           : Target refinement level
-//                PID          : Target patch ID
-//                i,j,k        : Indices of the target cell
-//                dv           : Cell volume at the target level
-//                Fluid        : Input fluid array (with NCOMP_TOTAL components)
-//                Pot          : Input potential array
-//                MagCC        : Input cell-centered B field array
-//                Vel          : Input velocity array
-//                Pres         : Input pressure array
-//                Lohner_Ave   : Input array storing the averages for the Lohner error estimator
-//                Lohner_Slope : Input array storing the slopes for the Lohner error estimator
-//                Lohner_NVar  : Number of variables stored in Lohner_Ave and Lohner_Slope
-//                ParCount     : Input array storing the number of particles on each cell
-//                               (note that it has the **real** type)
-//                ParDens      : Input array storing the particle mass density on each cell
-//                JeansCoeff   : Pi*GAMMA/(SafetyFactor^2*G), where SafetyFactor = FlagTable_Jeans[lv]
-//                               --> Flag if dh^2 > JeansCoeff*Pres/Dens^2
+// Parameter   :  lv            : Target refinement level
+//                PID           : Target patch ID
+//                i,j,k         : Indices of the target cell
+//                dv            : Cell volume at the target level
+//                Fluid         : Input fluid array (with NCOMP_TOTAL components)
+//                Pot           : Input potential array
+//                MagCC         : Input cell-centered B field array
+//                Vel           : Input velocity array
+//                Pres          : Input pressure array
+//                Lrtz          : Input Lorentz factor array
+//                LCool         : Input cooling length array
+//                Lohner_Var    : Input array storing the variables for the Lohner error estimator
+//                Lohner_Ave    : Input array storing the averages for the Lohner error estimator
+//                Lohner_Slope  : Input array storing the slopes for the Lohner error estimator
+//                Lohner_NVar   : Number of variables stored in Lohner_Ave and Lohner_Slope
+//                ParCount      : Input array storing the number of particles on each cell
+//                                (note that it has the **real** type)
+//                ParDens       : Input array storing the particle mass density on each cell
+//                JeansCoeff    : Pi*GAMMA/(SafetyFactor^2*G), where SafetyFactor = FlagTable_Jeans[lv]
+//                                --> Flag if dh^2 > JeansCoeff*Pres/Dens^2
+//                                --> When COMOVING is on, G has been replaced by a*G, where a is the scale factor
+//                Spectral_Cond : Input variable storing the spectral refinement condition
 //
 // Return      :  "true"  if any  of the refinement criteria is satisfied
 //                "false" if none of the refinement criteria is satisfied
 //-------------------------------------------------------------------------------------------------------
 bool Flag_Check( const int lv, const int PID, const int i, const int j, const int k, const real dv,
                  const real Fluid[][PS1][PS1][PS1], const real Pot[][PS1][PS1], const real MagCC[][PS1][PS1][PS1],
-                 const real Vel[][PS1][PS1][PS1], const real Pres[][PS1][PS1],
+                 const real Vel[][PS1][PS1][PS1], const real Pres[][PS1][PS1], const real Lrtz[][PS1][PS1],
+                 const real LCool[][PS1][PS1],
                  const real *Lohner_Var, const real *Lohner_Ave, const real *Lohner_Slope, const int Lohner_NVar,
-                 const real ParCount[][PS1][PS1], const real ParDens[][PS1][PS1], const real JeansCoeff )
+                 const real ParCount[][PS1][PS1], const real ParDens[][PS1][PS1], const real JeansCoeff,
+                 const real Spectral_Cond )
 {
 
    bool Flag = false;
 
-// check whether the input cell is within the regions allowed to be refined
-// ===========================================================================================
-   if ( OPT__FLAG_REGION )
-   {
-      if (  !Flag_Region( i, j, k, lv, PID )  )    return false;
-   }
 
+// *******************************************************************************************
+// refinement flags must be checked in the following order
+// 1. no-refinement criteria --> exclude patches not allowed for refinement
+// 2. OPT__FLAG_INTERFERENCE --> must be performed before all other refinement checks in order to set
+//                               amr->patch[0][lv][PID]->switch_to_wave_flag correctly
+// 3. refinement criteria
+// *******************************************************************************************
+
+
+// *****************************
+// 1. no-refinement criteria
+// *****************************
+
+// defined in Flag_Precheck() and called in Flag_Real()
+
+
+
+// *****************************
+// 2. OPT__FLAG_INTERFERENCE
+// *****************************
+
+// move to Flag_IterateCells() and called in Flag_Real()
+
+
+
+// *****************************
+// 3. refinement criteria
+// *****************************
+
+// patch-based criteria, such as OPT__FLAG_NPAR_PATCH and OPT__FLAG_PAR_TARGET, are checked in Flag_Real() directly
 
 #  ifdef PARTICLE
 // check the number of particles on each cell
@@ -106,6 +144,32 @@ bool Flag_Check( const int lv, const int PID, const int i, const int j, const in
 #  endif
 
 
+// check Lorentz factor gradient in SRHD
+// ===========================================================================================
+#  if ( MODEL == HYDRO  &&  defined SRHD )
+   if ( OPT__FLAG_LRTZ_GRADIENT )
+   {
+      Flag |= Check_Gradient( i, j, k, &Lrtz[0][0][0], FlagTable_LrtzGradient[lv] );
+      if ( Flag )    return Flag;
+   }
+#  endif
+
+
+// check cooling length
+// ===========================================================================================
+#  if ( MODEL == HYDRO  &&  defined SUPPORT_GRACKLE )
+   if ( OPT__FLAG_COOLING_LEN )
+   {
+#     ifdef GAMER_DEBUG
+      if ( LCool == NULL )   Aux_Error( ERROR_INFO, "LCool == NULL !!\n" );
+#     endif
+
+      Flag |= (  amr->dh[lv]*FlagTable_CoolingLen[lv] > LCool[k][j][i]  );
+      if ( Flag )    return Flag;
+   }
+#  endif
+
+
 // check vorticity
 // ===========================================================================================
 #  if ( MODEL == HYDRO )
@@ -123,6 +187,17 @@ bool Flag_Check( const int lv, const int PID, const int i, const int j, const in
    if ( OPT__FLAG_CURRENT )
    {
       Flag |= Check_Curl( i, j, k, MagCC[0], MagCC[1], MagCC[2], FlagTable_Current[lv] );
+      if ( Flag )    return Flag;
+   }
+#  endif
+
+
+// check cosmic ray
+// ===========================================================================================
+#  ifdef COSMIC_RAY
+   if ( OPT__FLAG_CRAY )
+   {
+      Flag |= ( Fluid[CRAY][k][j][i] > FlagTable_CRay[lv] );
       if ( Flag )    return Flag;
    }
 #  endif
@@ -149,25 +224,74 @@ bool Flag_Check( const int lv, const int PID, const int i, const int j, const in
 // check ELBDM energy density
 // ===========================================================================================
 #  if ( MODEL == ELBDM )
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   if ( amr->use_wave_flag[lv] ) {
+#  endif
    if ( OPT__FLAG_ENGY_DENSITY )
    {
       Flag |= ELBDM_Flag_EngyDensity( i, j, k, &Fluid[REAL][0][0][0], &Fluid[IMAG][0][0][0],
                                       FlagTable_EngyDensity[lv][0], FlagTable_EngyDensity[lv][1] );
       if ( Flag )    return Flag;
    }
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   } // if ( amr->use_wave_flag[lv] )
 #  endif
+#  endif // ELBDM
+
+
+// check ELBDM spectral criterion
+// ===========================================================================================
+#  if ( MODEL == ELBDM )
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   if ( amr->use_wave_flag[lv] ) {
+#  endif
+   if ( OPT__FLAG_SPECTRAL )
+   {
+      Flag |= ( Spectral_Cond > FlagTable_Spectral[lv][0] );
+      if ( Flag )    return Flag;
+   }
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   } // if ( amr->use_wave_flag[lv] )
+#  endif
+#  endif // ELBDM
 
 
 // check Lohner's error estimator
 // ===========================================================================================
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   if ( amr->use_wave_flag[lv] ) {
+#  endif
    if ( Lohner_NVar > 0 )
    {
 //    check Lohner only if density is greater than the minimum threshold
 #     ifdef DENS
-      if ( Fluid[DENS][k][j][i] >= FlagTable_Lohner[lv][3] )
+      if ( Fluid[DENS][k][j][i] >= FlagTable_Lohner[lv][4] )
 #     endif
       Flag |= Flag_Lohner( i, j, k, OPT__FLAG_LOHNER_FORM, Lohner_Var, Lohner_Ave, Lohner_Slope, Lohner_NVar,
-                           FlagTable_Lohner[lv][0], FlagTable_Lohner[lv][1], FlagTable_Lohner[lv][2] );
+                           FlagTable_Lohner[lv][0], FlagTable_Lohner[lv][2], FlagTable_Lohner[lv][3] );
+      if ( Flag )    return Flag;
+   }
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   } // if ( amr->use_wave_flag[lv] )
+#  endif
+
+
+// check minimum angular resolution
+// ===========================================================================================
+   if ( OPT__FLAG_ANGULAR )
+   {
+      Flag |= Check_Angular_Min( i, j, k, lv, PID, FLAG_ANGULAR_CEN_X, FLAG_ANGULAR_CEN_Y,
+                                 FLAG_ANGULAR_CEN_Z, FlagTable_Angular[lv][1] );
+      if ( Flag )    return Flag;
+   }
+
+
+// check radial resolution
+// ===========================================================================================
+   if ( OPT__FLAG_RADIAL )
+   {
+      Flag |= Check_Radial( i, j, k, lv, PID, FLAG_RADIAL_CEN_X, FLAG_RADIAL_CEN_Y,
+                            FLAG_RADIAL_CEN_Z, FlagTable_Radial[lv] );
       if ( Flag )    return Flag;
    }
 
@@ -314,3 +438,126 @@ bool Check_Curl( const int i, const int j, const int k,
    return Flag;
 
 } // FUNCTION : Check_Curl
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  Check_Angular_Max
+// Description :  Check if dh/R at cell (i,j,k) is smaller than the maximum angular resolution
+//
+// Note        :  1. Enabled by the runtime option "OPT__FLAG_ANGULAR"
+//                2. Invoked by Flag_Precheck()
+//
+// Parameter   :  i,j,k        : Target cell indices in the patch amr->patch[0][lv][PID]
+//                lv           : Refinement level of the target patch
+//                PID          : ID of the target patch
+//                CenX/Y/Z     : x/y/z-coordinate of the center for calculating angular resolution
+//                AngRes_Max   : Maximum allowed angular resolution (in radians)
+//                AngRes_Max_R : Minimum radius to apply AngRes_Max
+//
+// Return      :  "true/false"  if the input cell "is/is not" within the region allowed for refinement
+//-------------------------------------------------------------------------------------------------------
+bool Check_Angular_Max( const int i, const int j, const int k, const int lv, const int PID,
+                        const double CenX, const double CenY, const double CenZ,
+                        const double AngRes_Max, const double AngRes_Max_R )
+{
+
+// check
+#  ifdef GAMER_DEBUG
+   if (  i < 0  ||  i >= PS1  ||  j < 0  ||  j >= PS1  ||  k < 0  ||  k >= PS1  )
+      Aux_Error( ERROR_INFO, "incorrect index (i,j,k) = (%d,%d,%d) !!\n", i, j, k );
+#  endif
+
+   const double dh     = amr->dh[lv];                                         // cell size
+   const double Pos[3] = { amr->patch[0][lv][PID]->EdgeL[0] + (i+0.5)*dh,     // x,y,z position
+                           amr->patch[0][lv][PID]->EdgeL[1] + (j+0.5)*dh,
+                           amr->patch[0][lv][PID]->EdgeL[2] + (k+0.5)*dh  };
+   const double dR [3] = { Pos[0]-CenX, Pos[1]-CenY, Pos[2]-CenZ };
+   const double R      = sqrt( SQR(dR[0]) + SQR(dR[1]) + SQR(dR[2]) );
+
+   return ( AngRes_Max < 0.0  ||  2.0 * R * AngRes_Max <= dh  ||  R <= AngRes_Max_R );
+
+} // FUNCTION : Check_Angular_Max
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  Check_Angular_Min
+// Description :  Check if dh/R at cell (i,j,k) is larger than the minimum angular resolution
+//
+// Note        :  1. Enabled by the runtime option "OPT__FLAG_ANGULAR"
+//
+// Parameter   :  i,j,k        : Target cell indices in the patch amr->patch[0][lv][PID]
+//                lv           : Refinement level of the target patch
+//                PID          : ID of the target patch
+//                CenX/Y/Z     : x/y/z-coordinate of the center for calculating angular resolution
+//                AngRes_Min   : Minimum allowed angular resolution (in radians)
+//
+// Return      :  "true"  if the minimum angular resolution is not reached
+//                "false" if the minimum angular resolution is     reached
+//-------------------------------------------------------------------------------------------------------
+bool Check_Angular_Min( const int i, const int j, const int k, const int lv, const int PID,
+                        const double CenX, const double CenY, const double CenZ,
+                        const double AngRes_Min )
+{
+
+// check
+#  ifdef GAMER_DEBUG
+   if (  i < 0  ||  i >= PS1  ||  j < 0  ||  j >= PS1  ||  k < 0  ||  k >= PS1  )
+      Aux_Error( ERROR_INFO, "incorrect index (i,j,k) = (%d,%d,%d) !!\n", i, j, k );
+#  endif
+
+   const double dh     = amr->dh[lv];                                         // cell size
+   const double Pos[3] = { amr->patch[0][lv][PID]->EdgeL[0] + (i+0.5)*dh,     // x,y,z position
+                           amr->patch[0][lv][PID]->EdgeL[1] + (j+0.5)*dh,
+                           amr->patch[0][lv][PID]->EdgeL[2] + (k+0.5)*dh  };
+   const double dR [3] = { Pos[0]-CenX, Pos[1]-CenY, Pos[2]-CenZ };
+   const double R      = sqrt( SQR(dR[0]) + SQR(dR[1]) + SQR(dR[2]) );
+
+   return ( AngRes_Min >= 0.0  &&  R * AngRes_Min < dh );
+
+} // FUNCTION : Check_Angular_Min
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  Check_Radial
+// Description :  Check if the cell is within the given radius
+//
+// Note        :  1. Enabled by the runtime option "OPT__FLAG_RADIAL"
+//
+// Parameter   :  i,j,k       : Target cell indices in the patch amr->patch[0][lv][PID]
+//                lv          : Refinement level of the target patch
+//                PID         : ID of the target patch
+//                CenX/Y/Z    : x/y/z-coordinate of the center for calculating radial resolution
+//                Refine_Rad  : Radius at level lv within which grids are refined
+//
+// Return      :  "true"  if r <  Refine_Rad
+//                "false" if r >= Refine_Rad or Refine_Rad is not set
+//-------------------------------------------------------------------------------------------------------
+bool Check_Radial( const int i, const int j, const int k, const int lv, const int PID,
+                   const double CenX, const double CenY, const double CenZ, const double Refine_Rad )
+{
+
+// check
+#  ifdef GAMER_DEBUG
+   if (  i < 0  ||  i >= PS1  ||  j < 0  ||  j >= PS1  ||  k < 0  ||  k >= PS1  )
+      Aux_Error( ERROR_INFO, "incorrect index (i,j,k) = (%d,%d,%d) !!\n", i, j, k );
+#  endif
+
+   const double dh     = amr->dh[lv];                                         // cell size
+   const double Pos[3] = { amr->patch[0][lv][PID]->EdgeL[0] + (i+0.5)*dh,     // x,y,z position
+                           amr->patch[0][lv][PID]->EdgeL[1] + (j+0.5)*dh,
+                           amr->patch[0][lv][PID]->EdgeL[2] + (k+0.5)*dh  };
+   const double dR [3] = { Pos[0]-CenX, Pos[1]-CenY, Pos[2]-CenZ };
+   const double R      = sqrt( SQR(dR[0]) + SQR(dR[1]) + SQR(dR[2]) );
+
+// do not refine if the target radius is not set
+   if ( Refine_Rad < 0.0 )   return false;
+
+// refine the region within r < Refine_Rad and the innermost cells
+   if ( R < dh  ||  R < Refine_Rad )   return true;
+
+   return false;
+
+} // FUNCTION : Check_Radial

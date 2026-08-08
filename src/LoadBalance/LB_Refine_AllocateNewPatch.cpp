@@ -65,7 +65,7 @@ void LB_Refine_AllocateNewPatch( const int FaLv, int NNew_Home, int *NewPID_Home
                                  int NDel_Home, int *DelPID_Home, int NDel_Away, ulong *DelCr1D_Away,
                                  int &RefineS2F_Send_NPatchTotal, int *&RefineS2F_Send_PIDList,
                                  const int (*CFB_SibRank_Home)[6], const int (*CFB_SibRank_Away)[6],
-                                 const real *CFB_BField, const int *CFB_NSibEachRank )
+                                 const real *CFB_BField, const long *CFB_NSibEachRank )
 {
 
    const int SonLv    = FaLv + 1;
@@ -73,7 +73,6 @@ void LB_Refine_AllocateNewPatch( const int FaLv, int NNew_Home, int *NewPID_Home
    const int SonNReal = amr->NPatchComma[SonLv][1];
    const int SonNBuff = amr->NPatchComma[SonLv][3] - SonNReal;
    const int FaNPatch = amr->num[FaLv];
-
 
 // 1. get the matching lists for the away patches
 // ==========================================================================================
@@ -168,7 +167,7 @@ void LB_Refine_AllocateNewPatch( const int FaLv, int NNew_Home, int *NewPID_Home
       }
 
 //    2-1-3. sort the PID list and remove duplicates
-      Mis_Heapsort( NBufBk_Dup, PID_BufBk, NULL );
+      Mis_Heapsort<int,int>( NBufBk_Dup, PID_BufBk, NULL );
 
       NBufBk = ( NBufBk_Dup > 0 ) ? 1 : 0;
 
@@ -718,7 +717,8 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
 
    const int SonLv   = FaLv + 1;
    const int SonPID0 = amr->num[SonLv];
-   bool FaIsHome = false;
+   bool FaIsHome     = false;
+
 
 // 0. check : target father patch has no son
 #  ifdef GAMER_DEBUG
@@ -816,112 +816,28 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
                                        Monotonicity[v] = Monotonicity_Yes;
 
 #     elif ( MODEL == ELBDM )
+#     if ( ELBDM_SCHEME == ELBDM_HYBRID )
+      if ( amr->use_wave_flag[FaLv] ) {
+#     endif
       if ( v != REAL  &&  v != IMAG )  Monotonicity[v] = Monotonicity_Yes;
       else                             Monotonicity[v] = Monotonicity_No;
+#     if ( ELBDM_SCHEME == ELBDM_HYBRID )
+      } else { // if ( amr->use_wave_flag[FaLv] )
+      if ( v != PHAS  &&  v != STUB )  Monotonicity[v] = Monotonicity_Yes;
+      else                             Monotonicity[v] = Monotonicity_No;
+      } // if ( amr->use_wave_flag[FaLv] ) ... else ...
+#     endif
 
 #     else
 #     error : DO YOU WANT TO ENSURE THE POSITIVITY OF INTERPOLATION IN THIS NEW MODEL ??
 #     endif // MODEL
-   }
+   } // for (int v=0; v<NCOMP_TOTAL; v++)
 
 // 3.2.2 interpolation
-// 3.2.2-1. fluid
-   const int FSize_CC      = PS2;
-   const int FSize_CC3 [3] = { FSize_CC, FSize_CC, FSize_CC };
-   const int FStart_CC [3] = { 0, 0, 0 };
-   const int CSize_Flu3[3] = { CSize_Flu, CSize_Flu, CSize_Flu };
-   const int CStart_Flu[3] = { CGhost_Flu, CGhost_Flu, CGhost_Flu };
-   const int CRange_CC [3] = { PS1, PS1, PS1 };
-   const int CSize_Flu1v   = CUBE( CSize_Flu );
+   real *CData_Next = CData;
 
-   real *CData_Next       = CData;
-   real *const CData_Flu  = CData_Next;
-#  if ( MODEL == ELBDM )
-   real *const CData_Dens = CData_Flu + DENS*CSize_Flu1v;
-   real *const CData_Real = CData_Flu + REAL*CSize_Flu1v;
-   real *const CData_Imag = CData_Flu + IMAG*CSize_Flu1v;
-#  endif
-   CData_Next += NCOMP_TOTAL*CSize_Flu1v;
-
-   real (*FData_Flu)[FSize_CC][FSize_CC][FSize_CC] = new real [NCOMP_TOTAL][FSize_CC][FSize_CC][FSize_CC];
-
-#  if ( MODEL == ELBDM )
-   if ( OPT__INT_PHASE )
-   {
-//    get the wrapped phase (store in the REAL component)
-      for (int t=0; t<CSize_Flu1v; t++)   CData_Real[t] = ATAN2( CData_Imag[t], CData_Real[t] );
-
-//    interpolate density
-      Interpolate( CData_Dens, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[DENS][0][0][0],
-                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, &Monotonicity_Yes,
-                   IntOppSign0thOrder_No );
-
-//    interpolate phase
-      Interpolate( CData_Real, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[REAL][0][0][0],
-                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_Yes, &Monotonicity_No,
-                   IntOppSign0thOrder_No );
-   }
-
-   else // if ( OPT__INT_PHASE )
-   {
-      for (int v=0; v<NCOMP_TOTAL; v++)
-      Interpolate( CData_Flu+v*CSize_Flu1v, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[v][0][0][0],
-                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, Monotonicity,
-                   IntOppSign0thOrder_No );
-   }
-
-   if ( OPT__INT_PHASE )
-   {
-//    retrieve real and imaginary parts
-      real Amp, Phase, Rho;
-
-      for (int k=0; k<FSize_CC; k++)
-      for (int j=0; j<FSize_CC; j++)
-      for (int i=0; i<FSize_CC; i++)
-      {
-         Phase = FData_Flu[REAL][k][j][i];
-         Rho   = FData_Flu[DENS][k][j][i];
-
-//       be careful about the negative density introduced from the round-off errors
-         if ( Rho < (real)0.0 )
-         {
-            FData_Flu[DENS][k][j][i] = (real)0.0;
-            Rho                      = (real)0.0;
-         }
-
-         Amp                      = SQRT( Rho );
-         FData_Flu[REAL][k][j][i] = Amp*COS( Phase );
-         FData_Flu[IMAG][k][j][i] = Amp*SIN( Phase );
-      }
-   }
-
-#  else // #if ( MODEL == ELBDM )
-
-   for (int v=0; v<NCOMP_TOTAL; v++)
-   Interpolate( CData_Flu+v*CSize_Flu1v, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[v][0][0][0],
-                FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, Monotonicity,
-                INT_OPP_SIGN_0TH_ORDER );
-
-#  endif // #if ( MODEL == ELBDM ) ... else
-
-
-// 3.2.2-2. potential
-#  ifdef GRAVITY
-   const int CSize_Pot3[3] = { CSize_Pot, CSize_Pot, CSize_Pot };
-   const int CStart_Pot[3] = { CGhost_Pot, CGhost_Pot, CGhost_Pot };
-
-   real *const CData_Pot = CData_Next;
-   CData_Next += CUBE( CSize_Pot );
-
-   real (*FData_Pot)[FSize_CC][FSize_CC] = new real [FSize_CC][FSize_CC][FSize_CC];
-
-   Interpolate( CData_Pot, CSize_Pot3, CStart_Pot, CRange_CC, &FData_Pot[0][0][0],
-                FSize_CC3, FStart_CC, 1, OPT__REF_POT_INT_SCHEME, PhaseUnwrapping_No, &Monotonicity_No,
-                IntOppSign0thOrder_No );
-#  endif
-
-
-// 3.2.2-3. magnetic field
+// 3.2.2-1. magnetic field
+//          --> do it first since we need the cell-centered B field for INT_REDUCE_MONO_COEFF
 #  ifdef MHD
    const int FSize_Mag [3][3] = {  { PS2P1, PS2,   PS2   },
                                    { PS2,   PS2P1, PS2   },
@@ -935,10 +851,15 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
                                    { CGhost_Mag, CGhost_Mag, 0          }  };
    const int CRange_Mag[3]    = { PS1, PS1, PS1 };
 
+// be careful that the order of data in CData[] is fluid --> potential --> B field
+   CData_Next += NCOMP_TOTAL*CUBE( CSize_Flu );    // skip the fluid data
+#  ifdef GRAVITY
+   CData_Next += CUBE( CSize_Pot );                // skip the potential data
+#  endif
    real *const CData_MagX = CData_Next + MAGX*CSize_Mag_N*SQR( CSize_Mag_T );
    real *const CData_MagY = CData_Next + MAGY*CSize_Mag_N*SQR( CSize_Mag_T );
    real *const CData_MagZ = CData_Next + MAGZ*CSize_Mag_N*SQR( CSize_Mag_T );
-   CData_Next += NCOMP_MAG*CSize_Mag_N*SQR( CSize_Mag_T );
+   CData_Next = CData;  // reset CData_Next for the fluid data
 
    real (*FData_Mag)[ PS2P1*SQR(PS2) ] = new real [NCOMP_MAG][ PS2P1*SQR(PS2) ];
 
@@ -968,6 +889,173 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
 #  endif // #ifdef MHD
 
 
+// 3.2.2-2. fluid
+   const int FSize_CC      = PS2;
+   const int FSize_CC3 [3] = { FSize_CC, FSize_CC, FSize_CC };
+   const int FStart_CC [3] = { 0, 0, 0 };
+   const int CSize_Flu3[3] = { CSize_Flu, CSize_Flu, CSize_Flu };
+   const int CStart_Flu[3] = { CGhost_Flu, CGhost_Flu, CGhost_Flu };
+   const int CRange_CC [3] = { PS1, PS1, PS1 };
+   const int CSize_Flu1v   = CUBE( CSize_Flu );
+
+   real *const CData_Flu  = CData_Next;
+#  if ( MODEL == ELBDM )
+   real *const CData_Dens = CData_Flu + DENS*CSize_Flu1v;
+   real *const CData_Real = CData_Flu + REAL*CSize_Flu1v;
+   real *const CData_Imag = CData_Flu + IMAG*CSize_Flu1v;
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   real *const CData_Phas = CData_Flu + PHAS*CSize_Flu1v;
+#  endif
+#  endif
+   CData_Next += NCOMP_TOTAL*CSize_Flu1v;
+
+   real (*FData_Flu)[FSize_CC][FSize_CC][FSize_CC] = new real [NCOMP_TOTAL][FSize_CC][FSize_CC][FSize_CC];
+
+#  if ( MODEL == ELBDM )
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   if ( amr->use_wave_flag[FaLv] ) {
+#  endif
+
+   if ( OPT__INT_PHASE )
+   {
+//    get the wrapped phase (store in the REAL component)
+      for (int t=0; t<CSize_Flu1v; t++)   CData_Real[t] = SATAN2( CData_Imag[t], CData_Real[t] );
+
+      if ( OPT__REF_FLU_INT_SCHEME == INT_SPECTRAL ) {
+//    spectral interpolation currently does not respect monotonicity
+      const bool Monotonicity_Spec[2] = { true, false };
+
+//    interpolate density & phase
+//    INT_SPECTRAL with PhaseUnwrapping_Yes assumes that the density and phase fields are stored consecutively in memory
+      Interpolate( CData_Flu, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[DENS][0][0][0],
+                   FSize_CC3, FStart_CC, 2, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_Yes, Monotonicity_Spec,
+                   IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+      } else {
+//    interpolate density
+      Interpolate( CData_Dens, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[DENS][0][0][0],
+                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, &Monotonicity_Yes,
+                   IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+
+//    interpolate phase
+      Interpolate( CData_Real, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[REAL][0][0][0],
+                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_Yes, &Monotonicity_No,
+                   IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+      } // if ( OPT__REF_FLU_INT_SCHEME == INT_SPECTRAL ) ... else ...
+   } // if ( OPT__INT_PHASE )
+
+   else
+   {
+      Interpolate( CData_Flu, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[0][0][0][0],
+                   FSize_CC3, FStart_CC, NCOMP_TOTAL, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, Monotonicity,
+                   IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+   } // if ( OPT__INT_PHASE ) ... else ...
+
+// convert density/phase back to real and imaginary parts
+   if ( OPT__INT_PHASE )
+   {
+//    retrieve real and imaginary parts
+      real Amp, Phase, Rho;
+
+      for (int k=0; k<FSize_CC; k++)
+      for (int j=0; j<FSize_CC; j++)
+      for (int i=0; i<FSize_CC; i++)
+      {
+         Phase = FData_Flu[REAL][k][j][i];
+         Rho   = FData_Flu[DENS][k][j][i];
+
+//       be careful about the negative density introduced from the round-off errors
+         if ( Rho < (real)0.0 )
+         {
+            FData_Flu[DENS][k][j][i] = (real)0.0;
+            Rho                      = (real)0.0;
+         }
+
+         Amp                      = SQRT( Rho );
+         FData_Flu[REAL][k][j][i] = Amp*COS( Phase );
+         FData_Flu[IMAG][k][j][i] = Amp*SIN( Phase );
+      }
+   } // if ( OPT__INT_PHASE )
+
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   } else { // if ( amr->use_wave_flag[FaLv] )
+//    interpolate density
+      Interpolate( CData_Dens, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[DENS][0][0][0],
+                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, &Monotonicity_Yes,
+                   IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+
+//    interpolate phase
+      Interpolate( CData_Phas, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[PHAS][0][0][0],
+                   FSize_CC3, FStart_CC, 1, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, &Monotonicity_No,
+                   IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+
+   } // if ( amr->use_wave_flag[FaLv] ) ... else ...
+#  endif // #if ( ELBDM_SCHEME == ELBDM_HYBRID )
+
+#  else // #if ( MODEL == ELBDM )
+
+// prepare the fine-grid, cell-centered B field for INT_REDUCE_MONO_COEFF
+#  ifdef MHD
+   real (*FData_Mag_CC_IntIter)[NCOMP_MAG] = new real [ CUBE(FSize_CC) ][NCOMP_MAG];
+
+   for (int k=0; k<FSize_CC; k++)
+   for (int j=0; j<FSize_CC; j++)
+   for (int i=0; i<FSize_CC; i++)
+   {
+      const int t = IDX321( i, j, k, FSize_CC, FSize_CC );
+
+      MHD_GetCellCenteredBField( FData_Mag_CC_IntIter[t], FData_Mag[MAGX], FData_Mag[MAGY], FData_Mag[MAGZ],
+                                 FSize_CC, FSize_CC, FSize_CC, i, j, k );
+   }
+#  else
+   const real (*FData_Mag_CC_IntIter)[NCOMP_MAG] = NULL;
+#  endif // MHD
+
+// adopt INT_PRIM_NO to ensure conservation
+// --> no need to prepare the coarse-grid, cell-centered B field
+   Interpolate( CData_Flu, CSize_Flu3, CStart_Flu, CRange_CC, &FData_Flu[0][0][0][0],
+                FSize_CC3, FStart_CC, NCOMP_TOTAL, OPT__REF_FLU_INT_SCHEME, PhaseUnwrapping_No, Monotonicity,
+                INT_OPP_SIGN_0TH_ORDER, ALL_CONS_YES, INT_PRIM_NO, INT_REDUCE_MONO_COEFF,
+                NULL, FData_Mag_CC_IntIter );
+
+#  endif // #if ( MODEL == ELBDM ) ... else
+
+
+// 3.2.2-3. potential
+#  ifdef GRAVITY
+   const int CSize_Pot3[3] = { CSize_Pot, CSize_Pot, CSize_Pot };
+   const int CStart_Pot[3] = { CGhost_Pot, CGhost_Pot, CGhost_Pot };
+
+   real *const CData_Pot = CData_Next;
+   CData_Next += CUBE( CSize_Pot );
+
+   real (*FData_Pot)[FSize_CC][FSize_CC] = new real [FSize_CC][FSize_CC][FSize_CC];
+
+   Interpolate( CData_Pot, CSize_Pot3, CStart_Pot, CRange_CC, &FData_Pot[0][0][0],
+                FSize_CC3, FStart_CC, 1, OPT__REF_POT_INT_SCHEME, PhaseUnwrapping_No, &Monotonicity_No,
+                IntOppSign0thOrder_No, ALL_CONS_NO, INT_PRIM_NO, INT_FIX_MONO_COEFF, NULL, NULL );
+#  endif
+
+#  ifdef MHD
+   CData_Next += NCOMP_MAG*CSize_Mag_N*SQR( CSize_Mag_T );  // skip the B field since it has been prepared already (3.2.2-1)
+#  endif
+
+// (c1.3.4.3) convert density/phase to real and imaginary parts if patches were refined from phase to wave level
+#  if ( ELBDM_SCHEME == ELBDM_HYBRID )
+   if ( !amr->use_wave_flag[FaLv]  &&  amr->use_wave_flag[SonLv] ) {
+      real Amp, Phase, Re, Im;
+
+      for (int k=0; k<FSize_CC; k++) {
+      for (int j=0; j<FSize_CC; j++) {
+      for (int i=0; i<FSize_CC; i++) {
+//###REVISE: at this point, we should check whether dB wavelength is resolved after conversion to wave representation
+            Amp   = SQRT( FData_Flu[DENS][k][j][i] );
+            Phase =       FData_Flu[PHAS][k][j][i] ;
+            FData_Flu[REAL][k][j][i] = Amp*COS( Phase );
+            FData_Flu[IMAG][k][j][i] = Amp*SIN( Phase );
+      }}}
+   }
+#  endif
+
 // 3.2.3 check minimum density and pressure/internal energy
 // --> note that it's unnecessary to check negative passive scalars thanks to the monotonic interpolation
 // --> but we do renormalize passive scalars here
@@ -981,8 +1069,11 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
 
       if ( DensOld < MIN_DENS )
       {
-//       rescale wave function (unnecessary if OPT__INT_PHASE if off, in which case we will rescale all wave functions later)
+//       rescale wave function (unnecessary if OPT__INT_PHASE is disabled, in which case we will rescale all wave functions later)
 #        if ( MODEL == ELBDM )
+#        if ( ELBDM_SCHEME == ELBDM_HYBRID )
+         if ( amr->use_wave_flag[SonLv] )
+#        endif
          if ( OPT__INT_PHASE )
          {
             const real Rescale = SQRT( (real)MIN_DENS / DensOld );
@@ -997,7 +1088,7 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
       }
 
 
-#     if ( MODEL == HYDRO )
+#     if ( MODEL == HYDRO  &&  !defined SRHD )
 //    compute magnetic energy
 #     ifdef MHD
       const real Emag = MHD_GetCellCenteredBEnergy( FData_Mag[MAGX], FData_Mag[MAGY], FData_Mag[MAGZ],
@@ -1012,26 +1103,26 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
 //        the runtime parameter DUAL_ENERGY_SWITCH here
 #     ifdef DUAL_ENERGY
       const bool CheckMinPres_Yes = true;
-      const real UseEnpy2FixEngy  = HUGE_NUMBER;
+      const real UseDual2FixEngy  = HUGE_NUMBER;
       char dummy;    // we do not record the dual-energy status here
 
       Hydro_DualEnergyFix( FData_Flu[DENS][k][j][i], FData_Flu[MOMX][k][j][i], FData_Flu[MOMY][k][j][i],
-                           FData_Flu[MOMZ][k][j][i], FData_Flu[ENGY][k][j][i], FData_Flu[ENPY][k][j][i],
+                           FData_Flu[MOMZ][k][j][i], FData_Flu[ENGY][k][j][i], FData_Flu[DUAL][k][j][i],
                            dummy, EoS_AuxArray_Flt[1], EoS_AuxArray_Flt[2], CheckMinPres_Yes, MIN_PRES,
-                           UseEnpy2FixEngy, Emag );
+                           PassiveFloorMask, UseDual2FixEngy, Emag );
 
 #     else // #ifdef DUAL_ENERGY
 
 //    apply internal energy floor
       FData_Flu[ENGY][k][j][i]
          = Hydro_CheckMinEintInEngy( FData_Flu[DENS][k][j][i], FData_Flu[MOMX][k][j][i], FData_Flu[MOMY][k][j][i],
-                                     FData_Flu[MOMZ][k][j][i], FData_Flu[ENGY][k][j][i], MIN_EINT, Emag );
+                                     FData_Flu[MOMZ][k][j][i], FData_Flu[ENGY][k][j][i], MIN_EINT, PassiveFloorMask, Emag );
 #     endif // #ifdef DUAL_ENERGY ... else ...
 #     endif // #if ( MODEL == HYDRO )
 
 
 //    normalize passive scalars
-#     if ( NCOMP_PASSIVE > 0 )
+#     if ( NCOMP_PASSIVE > 0  &&  MODEL == HYDRO )
       if ( OPT__NORMALIZE_PASSIVE )
       {
          real Passive[NCOMP_PASSIVE];
@@ -1098,31 +1189,39 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
 
 //    rescale real and imaginary parts to get the correct density in ELBDM if OPT__INT_PHASE is off
 #     if ( MODEL == ELBDM )
+#     if ( ELBDM_SCHEME == ELBDM_HYBRID )
+      if ( amr->use_wave_flag[SonLv] ) {
+#     endif
       real Real, Imag, Rho_Corr, Rho_Wrong, Rescale;
 
-      if ( !OPT__INT_PHASE )
-      for (int k=0; k<PS1; k++)
-      for (int j=0; j<PS1; j++)
-      for (int i=0; i<PS1; i++)
-      {
-         Real      = amr->patch[FSg_Flu][SonLv][SonPID]->fluid[REAL][k][j][i];
-         Imag      = amr->patch[FSg_Flu][SonLv][SonPID]->fluid[IMAG][k][j][i];
-         Rho_Wrong = Real*Real + Imag*Imag;
-         Rho_Corr  = amr->patch[FSg_Flu][SonLv][SonPID]->fluid[DENS][k][j][i];
-
-//       be careful about the negative density introduced from the round-off errors
-         if ( Rho_Wrong <= (real)0.0  ||  Rho_Corr <= (real)0.0 )
+      if ( !OPT__INT_PHASE ) {
+         for (int k=0; k<PS1; k++)
+         for (int j=0; j<PS1; j++)
+         for (int i=0; i<PS1; i++)
          {
-            amr->patch[FSg_Flu][SonLv][SonPID]->fluid[DENS][k][j][i] = (real)0.0;
-            Rescale = (real)0.0;
-         }
-         else
-            Rescale = SQRT( Rho_Corr/Rho_Wrong );
+            Real      = amr->patch[FSg_Flu][SonLv][SonPID]->fluid[REAL][k][j][i];
+            Imag      = amr->patch[FSg_Flu][SonLv][SonPID]->fluid[IMAG][k][j][i];
+            Rho_Wrong = Real*Real + Imag*Imag;
+            Rho_Corr  = amr->patch[FSg_Flu][SonLv][SonPID]->fluid[DENS][k][j][i];
 
-         amr->patch[FSg_Flu][SonLv][SonPID]->fluid[REAL][k][j][i] *= Rescale;
-         amr->patch[FSg_Flu][SonLv][SonPID]->fluid[IMAG][k][j][i] *= Rescale;
-      }
+//          be careful about the negative density introduced from the round-off errors
+            if ( Rho_Wrong <= (real)0.0  ||  Rho_Corr <= (real)0.0 )
+            {
+               amr->patch[FSg_Flu][SonLv][SonPID]->fluid[DENS][k][j][i] = (real)0.0;
+               Rescale = (real)0.0;
+            }
+            else
+               Rescale = SQRT( Rho_Corr/Rho_Wrong );
+
+            amr->patch[FSg_Flu][SonLv][SonPID]->fluid[REAL][k][j][i] *= Rescale;
+            amr->patch[FSg_Flu][SonLv][SonPID]->fluid[IMAG][k][j][i] *= Rescale;
+         }
+      } // if ( !OPT__INT_PHASE )
+
+#     if ( ELBDM_SCHEME == ELBDM_HYBRID )
+      } // if ( amr->use_wave_flag[SonLv] )
 #     endif
+#     endif // #if ( MODEL == ELBDM )
    } // for (int LocalID=0; LocalID<8; LocalID++)
 
 
@@ -1142,6 +1241,7 @@ int AllocateSonPatch( const int FaLv, const int *Cr, const int PScale, const int
 #  endif
 #  ifdef MHD
    delete [] FData_Mag;
+   delete [] FData_Mag_CC_IntIter;
 #  endif
 
 
